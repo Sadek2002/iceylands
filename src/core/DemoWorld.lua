@@ -564,6 +564,50 @@ local function maybeJumpForLedge(state, root, humanoid, moveTarget)
     return false
 end
 
+
+local function emergencyStepJump(state, root, humanoid, moveTarget)
+    if not root or not humanoid or not moveTarget then
+        return false
+    end
+    if not grounded(humanoid) or humanoid.FloorMaterial == Enum.Material.Air then
+        return false
+    end
+    if os.clock() - (state.LastEmergencyJump or 0) < 0.9 then
+        return false
+    end
+
+    local delta = Vector3.new(moveTarget.X - root.Position.X, 0, moveTarget.Z - root.Position.Z)
+    if delta.Magnitude < 1 then
+        return false
+    end
+    local dir = delta.Unit
+    local ignore = {getCharacter()}
+    local currentY = getGroundYAt(root.Position, ignore)
+    if not currentY then
+        return false
+    end
+
+    -- Look for the floor directly in front being one block higher.
+    -- This catches block-world ledges where a body ray misses the vertical face.
+    for _, dist in ipairs({1.6, 2.3, 3.0}) do
+        local probe = root.Position + dir * dist
+        local aheadY = getGroundYAt(probe + Vector3.new(0, 3.5, 0), ignore)
+        if aheadY then
+            local rise = aheadY - currentY
+            if rise > 0.65 and rise <= 4.15 then
+                state.LastEmergencyJump = os.clock()
+                humanoid.Jump = true
+                pcall(function()
+                    humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                end)
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
 local function maybeStuck(state, root)
     if os.clock() - (state.LastStuckCheck or 0) < 0.45 then
         return false
@@ -661,7 +705,9 @@ local function movementTick(state)
     end
 
     if maybeStuck(state, root) then
-        maybeJumpForLedge(state, root, humanoid, stand)
+        -- Only jump when we are actually stuck and the next floor in front is higher.
+        -- This avoids constant jump spam while still climbing 1-block ledges.
+        emergencyStepJump(state, root, humanoid, stand)
         state.Waypoints = nil
         state.LastPathTime = 0
     end
