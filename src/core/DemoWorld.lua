@@ -55,9 +55,10 @@ local MAX_JUMP_HEIGHT = 5.8
 local MAX_DROP_HEIGHT = 7.5
 local TREE_STAND_MIN_DISTANCE = 5
 local TREE_STAND_MAX_DISTANCE = 11
-local WAYPOINT_REACHED_DISTANCE = 4.5
-local MIN_MOVETO_INTERVAL = 1.1
-local STUCK_REPATH_SECONDS = 2.4
+local WAYPOINT_REACHED_DISTANCE = 3.0
+local MIN_MOVETO_INTERVAL = 0.18
+local STUCK_REPATH_SECONDS = 1.1
+local STUCK_JUMP_SECONDS = 0.35
 
 local function isProbablySaplingOrStump(instance)
     if not instance then
@@ -1015,63 +1016,76 @@ local function followMovementPath(path, targetPosition)
         humanoid.AutoJumpEnabled = true
     end)
 
+    -- Keep normal Roblox-style walking. Do not use Humanoid:Move here because it
+    -- can fight MoveTo and make the character crawl/tap-step on block terrain.
     local index = math.clamp(DemoWorld.CurrentPathIndex or 1, 1, #path)
 
-    -- Skip waypoints we are already close to. This prevents the old stop-start
-    -- block-by-block movement while still preserving turns and jumps.
     while index <= #path do
         local point = normalizePathPoint(path[index])
         if not point then
             break
         end
+
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(point.X, 0, point.Z)).Magnitude
-        local verticalDistance = math.abs(point.Y - root.Position.Y)
-        if flatDistance > WAYPOINT_REACHED_DISTANCE or verticalDistance > 5.5 then
+        local verticalDistance = point.Y - root.Position.Y
+
+        if flatDistance > WAYPOINT_REACHED_DISTANCE or math.abs(verticalDistance) > 5.5 then
             break
         end
+
         index += 1
     end
 
     DemoWorld.CurrentPathIndex = index
     if index > #path then
-        humanoid:Move(Vector3.zero, false)
         return true, false
     end
 
     local waypoint, action = normalizePathPoint(path[index])
     if not waypoint then
-        humanoid:Move(Vector3.zero, false)
         return true, false
     end
 
     local flatOffset = Vector3.new(waypoint.X - root.Position.X, 0, waypoint.Z - root.Position.Z)
     local waypointDistance = flatOffset.Magnitude
     local moveDirection = waypointDistance > 0.05 and flatOffset.Unit or Vector3.zero
-
     local now = os.clock()
-    if waypointDistance + 0.25 < (DemoWorld.LastWaypointDistance or math.huge) then
+
+    -- Progress tracking. If distance is not improving but the target is still in
+    -- front of us, jump quickly, then repath if we stay stuck.
+    if waypointDistance + 0.15 < (DemoWorld.LastWaypointDistance or math.huge) then
         DemoWorld.LastWaypointDistance = waypointDistance
         DemoWorld.LastProgressAt = now
-    elseif (now - (DemoWorld.LastProgressAt or now)) > STUCK_REPATH_SECONDS and (now - (DemoWorld.LastStuckRepathAt or 0)) > 2.8 then
-        DemoWorld.LastStuckRepathAt = now
-        DemoWorld.LastWaypointDistance = math.huge
-        DemoWorld.LastProgressAt = now
-        humanoid:Move(Vector3.zero, false)
-        return false, true
+        DemoWorld.LastJumpNudgeAt = nil
+    else
+        local stuckFor = now - (DemoWorld.LastProgressAt or now)
+        if stuckFor > STUCK_JUMP_SECONDS and moveDirection.Magnitude > 0.05 and (now - (DemoWorld.LastJumpNudgeAt or 0)) > 0.45 then
+            DemoWorld.LastJumpNudgeAt = now
+            humanoid.Jump = true
+        end
+
+        if stuckFor > STUCK_REPATH_SECONDS and (now - (DemoWorld.LastStuckRepathAt or 0)) > 1.6 then
+            DemoWorld.LastStuckRepathAt = now
+            DemoWorld.LastWaypointDistance = math.huge
+            DemoWorld.LastProgressAt = now
+            DemoWorld.LastJumpNudgeAt = nil
+            DemoWorld.LastMoveToPoint = nil
+            return false, true
+        end
     end
 
     if action == Enum.PathWaypointAction.Jump
-        or waypoint.Y - root.Position.Y > 0.75
+        or waypoint.Y - root.Position.Y > 0.45
         or shouldJumpForObstacle(root, moveDirection) then
         humanoid.Jump = true
     end
 
-    -- Smooth movement: hold movement direction every frame like a real player.
-    -- MoveTo is only a background nudge so Roblox keeps navigating, not a tap.
-    humanoid:Move(moveDirection, false)
-
-    if now - (DemoWorld.MoveToIssuedAt or 0) >= MIN_MOVETO_INTERVAL then
+    -- Smooth movement: keep one MoveTo target active and refresh it often enough
+    -- that Roblox walks continuously instead of stepping block-by-block.
+    if now - (DemoWorld.MoveToIssuedAt or 0) >= MIN_MOVETO_INTERVAL
+        or (DemoWorld.LastMoveToPoint and (DemoWorld.LastMoveToPoint - waypoint).Magnitude > 1.5) then
         DemoWorld.MoveToIssuedAt = now
+        DemoWorld.LastMoveToPoint = waypoint
         humanoid:MoveTo(waypoint)
     end
 
@@ -1096,6 +1110,8 @@ function DemoWorld.SetMovementDemo(enabled)
     DemoWorld.CurrentPathIndex = 1
     DemoWorld.LastTargetSearch = 0
     DemoWorld.MoveToIssuedAt = 0
+    DemoWorld.LastJumpNudgeAt = nil
+    DemoWorld.LastMoveToPoint = nil
     DemoWorld.IgnoredTargets = {}
     equipBestAxeThrottled(true)
     DemoWorld.SpawnObjectsAtTreePositions(10, true)
@@ -1134,6 +1150,8 @@ function DemoWorld.SetMovementDemo(enabled)
             DemoWorld.MoveToIssuedAt = 0
             DemoWorld.LastWaypointDistance = math.huge
             DemoWorld.LastProgressAt = now
+            DemoWorld.LastJumpNudgeAt = nil
+            DemoWorld.LastMoveToPoint = nil
             equipBestAxeThrottled(true)
         else
             equipBestAxeThrottled(false)
@@ -1193,6 +1211,8 @@ function DemoWorld.SetMovementDemo(enabled)
                 DemoWorld.CurrentPath = path
                 DemoWorld.CurrentPathIndex = 1
                 DemoWorld.MoveToIssuedAt = 0
+                DemoWorld.LastMoveToPoint = nil
+                DemoWorld.LastJumpNudgeAt = nil
                 DemoWorld.LastWaypointDistance = math.huge
                 DemoWorld.LastProgressAt = now
             else
