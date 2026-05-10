@@ -833,9 +833,14 @@ local function getTreeStandPosition(startPosition, targetPosition)
     -- The previous versions could aim at a model pivot or leaf height, which made
     -- the character climb/jump upward and get stuck above the tree.
     local flatStand = targetPosition + away.Unit * 6
-    local groundPos = findGroundAtXZ(flatStand.X, flatStand.Z, math.max(startPosition.Y, targetPosition.Y) + 10)
-    if groundPos then
-        return groundPos + Vector3.new(0, 3.1, 0)
+
+    -- Extra guard: some loadstring builds can call this before helpers are assigned.
+    -- Never allow tree movement to error-loop; fall back to the player's current height.
+    if type(findGroundAtXZ) == "function" then
+        local groundPos = findGroundAtXZ(flatStand.X, flatStand.Z, math.max(startPosition.Y, targetPosition.Y) + 10)
+        if groundPos then
+            return groundPos + Vector3.new(0, 3.1, 0)
+        end
     end
 
     return Vector3.new(flatStand.X, startPosition.Y, flatStand.Z)
