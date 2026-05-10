@@ -478,9 +478,7 @@ local function movementTick(state)
 
     humanoid:MoveTo(target)
 
-    if waypoint.Action == Enum.PathWaypointAction.Jump then
-        humanoid.Jump = true
-    elseif shouldJumpForStep(root) and os.clock() - (state.LastJump or 0) > 0.7 then
+    if waypoint.Action == Enum.PathWaypointAction.Jump and os.clock() - (state.LastJump or 0) > 0.8 then
         state.LastJump = os.clock()
         humanoid.Jump = true
     end
@@ -488,8 +486,7 @@ local function movementTick(state)
     if os.clock() - (state.LastStuckCheck or 0) > 0.5 then
         local moved = (root.Position - (state.LastPos or root.Position)).Magnitude
         if moved < 0.8 then
-            if os.clock() - (state.StuckSince or os.clock()) > 1.1 then
-                humanoid.Jump = true
+            if os.clock() - (state.StuckSince or os.clock()) > 1.25 then
                 state.Waypoints = nil
                 state.LastPathTime = 0
                 state.StuckSince = os.clock()

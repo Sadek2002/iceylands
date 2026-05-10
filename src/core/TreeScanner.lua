@@ -3,12 +3,12 @@ local Workspace = game:GetService("Workspace")
 
 local TreeScanner = {}
 
-TreeScanner.MaxDistance = 180
-TreeScanner.CacheTTL = 1.25
+TreeScanner.MaxDistance = 220
+TreeScanner.CacheTTL = 2.0
 TreeScanner._cache = nil
 TreeScanner._cacheTime = 0
 
-local TreeFolderNames = {
+local TreeNames = {
     tree1 = true,
     tree2 = true,
     tree3 = true,
@@ -24,6 +24,14 @@ local FriendlyNames = {
     treeorange = "Orange Tree",
 }
 
+local function lowerName(obj)
+    return string.lower(obj and obj.Name or "")
+end
+
+local function isTreeContainer(obj)
+    return obj and (obj:IsA("Folder") or obj:IsA("Model")) and TreeNames[lowerName(obj)] == true
+end
+
 local function getRoot()
     local player = Players.LocalPlayer
     local character = player and player.Character
@@ -36,36 +44,20 @@ local function flatDistance(a, b)
     return math.sqrt(dx * dx + dz * dz)
 end
 
-local function findFirstBasePart(container, name)
-    if not container then return nil end
-    local wanted = string.lower(name)
-    for _, child in ipairs(container:GetDescendants()) do
-        if child:IsA("BasePart") and string.lower(child.Name) == wanted then
-            return child
+local function findPart(container, partName)
+    local wanted = string.lower(partName)
+    for _, obj in ipairs(container:GetDescendants()) do
+        if obj:IsA("BasePart") and string.lower(obj.Name) == wanted then
+            return obj
         end
     end
     return nil
 end
 
-local function isTreeName(name)
-    return TreeFolderNames[string.lower(name or "")] == true
-end
-
-local function getTreeContainerFrom(obj)
+local function hasAncestorNamed(obj, name)
     local cur = obj
     while cur and cur ~= Workspace do
-        if (cur:IsA("Folder") or cur:IsA("Model")) and isTreeName(cur.Name) then
-            return cur
-        end
-        cur = cur.Parent
-    end
-    return nil
-end
-
-local function isInsideBlocks(container)
-    local cur = container
-    while cur and cur ~= Workspace do
-        if cur.Name == "Blocks" then
+        if cur.Name == name then
             return true
         end
         cur = cur.Parent
@@ -73,88 +65,67 @@ local function isInsideBlocks(container)
     return false
 end
 
-local function getTreePosition(container)
-    local trunk = findFirstBasePart(container, "trunk")
-    if not trunk then return nil, nil end
-    local baseY = trunk.Position.Y - (trunk.Size.Y / 2) + 1.5
-    return Vector3.new(trunk.Position.X, baseY, trunk.Position.Z), trunk
-end
-
-local function isLiveTree(container)
-    if not container or not container.Parent then return false end
-    if not isTreeName(container.Name) then return false end
-    if not isInsideBlocks(container) then return false end
-
-    local trunk = findFirstBasePart(container, "trunk")
-    if not trunk or not trunk.Parent then return false end
-
-    local leaves = findFirstBasePart(container, "leaves")
-    local leafSpawner = container:FindFirstChild("LeafSpawner", true)
-    return leaves ~= nil or leafSpawner ~= nil
-end
-
-local function treeType(container)
-    local lower = string.lower(container.Name)
-    return FriendlyNames[lower] or container.Name
-end
-
-local function getIslandOf(container)
-    local cur = container
-    local lastBeforeIslands
+local function getIslandOf(obj)
+    local cur = obj
     while cur and cur ~= Workspace do
         if cur.Parent and cur.Parent.Name == "Islands" then
             return cur
         end
-        lastBeforeIslands = cur
         cur = cur.Parent
     end
-    return lastBeforeIslands
-end
-
-local function getCurrentIsland(root)
-    local islands = Workspace:FindFirstChild("Islands")
-    if not islands or not root then return nil end
-
-    local bestIsland = nil
-    local bestDistance = math.huge
-
-    for _, island in ipairs(islands:GetChildren()) do
-        local blocks = island:FindFirstChild("Blocks")
-        if blocks then
-            -- Sample only direct block parts. This avoids scanning the entire island every frame.
-            local checked = 0
-            for _, part in ipairs(blocks:GetChildren()) do
-                if part:IsA("BasePart") then
-                    checked += 1
-                    local d = flatDistance(root.Position, part.Position)
-                    if d < bestDistance then
-                        bestDistance = d
-                        bestIsland = island
-                    end
-                    if checked >= 160 then break end
-                end
-            end
-        end
-    end
-
-    if bestDistance <= 260 then return bestIsland end
     return nil
 end
 
+local function isLiveTree(container)
+    if not isTreeContainer(container) or not container.Parent then
+        return false
+    end
+
+    -- Real trees are stored below island Blocks. This avoids pets, mobs, and random models.
+    if not hasAncestorNamed(container, "Blocks") then
+        return false
+    end
+
+    local trunk = findPart(container, "trunk")
+    if not trunk or not trunk.Parent then
+        return false
+    end
+
+    -- After a tree is chopped, the trunk/leaves structure is removed or becomes incomplete.
+    local leaves = findPart(container, "leaves")
+    local leafSpawner = container:FindFirstChild("LeafSpawner", true)
+    return leaves ~= nil or leafSpawner ~= nil
+end
+
+local function getPosition(container)
+    local trunk = findPart(container, "trunk")
+    if not trunk then
+        return nil, nil
+    end
+
+    local groundY = trunk.Position.Y - (trunk.Size.Y * 0.5) + 2.5
+    return Vector3.new(trunk.Position.X, groundY, trunk.Position.Z), trunk
+end
+
 local function addTree(results, seen, container, root)
-    if not container or seen[container] then return end
+    if seen[container] or not isLiveTree(container) then
+        return
+    end
     seen[container] = true
 
-    if not isLiveTree(container) then return end
-
-    local pos, trunk = getTreePosition(container)
-    if not pos then return end
+    local pos, trunk = getPosition(container)
+    if not pos or not trunk then
+        return
+    end
 
     local distance = root and flatDistance(root.Position, pos) or 0
-    if root and distance > TreeScanner.MaxDistance then return end
+    if root and distance > TreeScanner.MaxDistance then
+        return
+    end
 
+    local raw = lowerName(container)
     table.insert(results, {
-        Name = treeType(container),
+        Name = FriendlyNames[raw] or container.Name,
         RawName = container.Name,
         Path = container:GetFullName(),
         Instance = container,
@@ -163,30 +134,34 @@ local function addTree(results, seen, container, root)
         Trunk = trunk,
         Position = pos,
         Distance = math.floor(distance * 10 + 0.5) / 10,
-        PartCount = #container:GetDescendants(),
     })
 end
 
-local function scanTreeContainers(scanRoot, root)
+local function scanUnder(scanRoot, root, results, seen)
+    if not scanRoot then
+        return
+    end
+
+    -- Fast path: tree containers themselves.
+    for _, obj in ipairs(scanRoot:GetDescendants()) do
+        if isTreeContainer(obj) then
+            addTree(results, seen, obj, root)
+        end
+    end
+end
+
+local function scanAll(root)
     local results = {}
     local seen = {}
+    local islands = Workspace:FindFirstChild("Islands")
 
-    -- Main fast path: real tree containers are direct/descendant children of Blocks.
-    local blocks = scanRoot and scanRoot:FindFirstChild("Blocks")
-    local rootToScan = blocks or scanRoot
-    if not rootToScan then return results end
-
-    for _, obj in ipairs(rootToScan:GetDescendants()) do
-        local container = nil
-        if (obj:IsA("Folder") or obj:IsA("Model")) and isTreeName(obj.Name) then
-            container = obj
-        elseif obj:IsA("BasePart") and (string.lower(obj.Name) == "trunk" or string.lower(obj.Name) == "leaves") then
-            container = getTreeContainerFrom(obj)
+    if islands then
+        for _, island in ipairs(islands:GetChildren()) do
+            local blocks = island:FindFirstChild("Blocks")
+            scanUnder(blocks or island, root, results, seen)
         end
-
-        if container then
-            addTree(results, seen, container, root)
-        end
+    else
+        scanUnder(Workspace, root, results, seen)
     end
 
     table.sort(results, function(a, b)
@@ -201,23 +176,17 @@ function TreeScanner.IsLiveTree(tree)
     return isLiveTree(container)
 end
 
-function TreeScanner.GetCurrentIsland()
-    return getCurrentIsland(getRoot())
-end
-
-function TreeScanner.RefreshCache(maxClusters)
+function TreeScanner.RefreshCache(maxTrees)
     local root = getRoot()
-    local island = getCurrentIsland(root)
-    local scanRoot = island or (Workspace:FindFirstChild("Islands") or Workspace)
-    local results = scanTreeContainers(scanRoot, root)
+    local results = scanAll(root)
 
     TreeScanner._cache = results
     TreeScanner._cacheTime = os.clock()
 
-    if maxClusters then
+    if maxTrees then
         local limited = {}
-        for i = 1, math.min(maxClusters, #results) do
-            table.insert(limited, results[i])
+        for i = 1, math.min(maxTrees, #results) do
+            limited[#limited + 1] = results[i]
         end
         return limited
     end
@@ -225,21 +194,20 @@ function TreeScanner.RefreshCache(maxClusters)
     return results
 end
 
-function TreeScanner.GetClusters(maxClusters, forceRefresh)
+function TreeScanner.GetClusters(maxTrees, forceRefresh)
     if forceRefresh or not TreeScanner._cache or (os.clock() - TreeScanner._cacheTime) > TreeScanner.CacheTTL then
-        return TreeScanner.RefreshCache(maxClusters)
+        return TreeScanner.RefreshCache(maxTrees)
     end
 
-    local results = TreeScanner._cache
-    if maxClusters then
+    if maxTrees then
         local limited = {}
-        for i = 1, math.min(maxClusters, #results) do
-            table.insert(limited, results[i])
+        for i = 1, math.min(maxTrees, #TreeScanner._cache) do
+            limited[#limited + 1] = TreeScanner._cache[i]
         end
         return limited
     end
 
-    return results
+    return TreeScanner._cache
 end
 
 return TreeScanner
