@@ -1,6 +1,8 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local Runtime = _G.IceylandsLoader
+local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
 local DemoWorld = {
     FolderName = "IceylandsDemo",
@@ -52,20 +54,6 @@ local function makeTreePoint(name, position)
     return part
 end
 
-local function isTreeCandidate(item)
-    local name = string.lower(item.Name)
-
-    if string.match(name, "^tree%d*$") or string.match(name, "^tree%a+$") then
-        return true
-    end
-
-    if item.Parent and item.Parent.Name == "Blocks" and string.find(name, "tree", 1, true) then
-        return true
-    end
-
-    return string.find(name, " tree", 1, true) ~= nil or string.find(name, "tree", 1, true) == 1
-end
-
 function DemoWorld.EnsureObjects()
     local folder = getFolder()
     local root = getRoot()
@@ -103,60 +91,7 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
     DemoWorld.ClearObjects()
 
     local folder = getFolder()
-    local root = getRoot()
-    local candidates = {}
-
-    for _, item in ipairs(Workspace:GetDescendants()) do
-        if item:IsA("BasePart") and isTreeCandidate(item) then
-            local distance = root and (root.Position - item.Position).Magnitude or 0
-            table.insert(candidates, {
-                Name = item.Name,
-                Position = item.Position,
-                Distance = distance,
-            })
-        end
-    end
-
-    table.sort(candidates, function(a, b)
-        return a.Distance < b.Distance
-    end)
-
-    local clusters = {}
-    local clusterRadius = 16
-
-    for _, candidate in ipairs(candidates) do
-        local assigned = false
-
-        for _, cluster in ipairs(clusters) do
-            local flatCandidate = Vector3.new(candidate.Position.X, 0, candidate.Position.Z)
-            local flatCluster = Vector3.new(cluster.Center.X, 0, cluster.Center.Z)
-
-            if (flatCandidate - flatCluster).Magnitude <= clusterRadius then
-                cluster.Count += 1
-                cluster.Sum += candidate.Position
-                cluster.Center = cluster.Sum / cluster.Count
-                cluster.MinY = math.min(cluster.MinY, candidate.Position.Y)
-                table.insert(cluster.Names, candidate.Name)
-                assigned = true
-                break
-            end
-        end
-
-        if not assigned then
-            table.insert(clusters, {
-                Count = 1,
-                Sum = candidate.Position,
-                Center = candidate.Position,
-                MinY = candidate.Position.Y,
-                Distance = candidate.Distance,
-                Names = { candidate.Name },
-            })
-        end
-    end
-
-    table.sort(clusters, function(a, b)
-        return a.Distance < b.Distance
-    end)
+    local clusters = TreeScanner.GetClusters(maxObjects or 10)
 
     local created = 0
     for index, cluster in ipairs(clusters) do
@@ -164,11 +99,10 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
             break
         end
 
-        local position = Vector3.new(cluster.Center.X, cluster.MinY + 0.75, cluster.Center.Z)
-        local part = makeTreePoint("DemoTreePoint" .. index, position)
+        local part = makeTreePoint("DemoTreePoint" .. index, cluster.Position)
         part:SetAttribute("IceylandsDemoObject", true)
         part:SetAttribute("Collected", false)
-        part:SetAttribute("SourceTreeName", table.concat(cluster.Names, ", "))
+        part:SetAttribute("SourceTreeName", cluster.RawName)
         part.Parent = folder
         created += 1
     end

@@ -1,28 +1,11 @@
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
 
 local Runtime = _G.IceylandsLoader
 local Components = Runtime.LoadModule("src/ui/Components.lua")
+local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
 local Foraging = {}
-
-local TreeNames = {
-    ["Apple Tree"] = true,
-    ["Avocado Tree"] = true,
-    ["Birch Tree"] = true,
-    ["Cherry Blossom Tree"] = true,
-    ["Hickory Tree"] = true,
-    ["Kiwi Tree"] = true,
-    ["Lemon Tree"] = true,
-    ["Maple Tree"] = true,
-    ["Oak Tree"] = true,
-    ["Orange Tree"] = true,
-    ["Palm Tree"] = true,
-    ["Pine Tree"] = true,
-    ["Plum Tree"] = true,
-    ["Spirit Tree"] = true,
-}
 
 local AxePriority = {
     ["Wooden"] = 1,
@@ -33,57 +16,6 @@ local AxePriority = {
     ["Opal"] = 6,
     ["Void Mattock"] = 7,
 }
-
-local function isTreeCandidate(item)
-    if TreeNames[item.Name] then
-        return true
-    end
-
-    local name = string.lower(item.Name)
-    if string.match(name, "^tree%d*$") or string.match(name, "^tree%a+$") then
-        return true
-    end
-
-    if item.Parent and item.Parent.Name == "Blocks" and string.find(name, "tree", 1, true) then
-        return true
-    end
-
-    return false
-end
-
-local function getDisplayName(item)
-    if TreeNames[item.Name] then
-        return item.Name
-    end
-
-    return item.Name .. " (client tree part)"
-end
-
-local function getRoot()
-    local character = Players.LocalPlayer and Players.LocalPlayer.Character
-    return character and character:FindFirstChild("HumanoidRootPart")
-end
-
-local function getModelPosition(model)
-    if model:IsA("BasePart") then
-        return model.Position
-    end
-
-    if model:IsA("Model") then
-        local ok, pivot = pcall(function()
-            return model:GetPivot()
-        end)
-
-        if ok then
-            return pivot.Position
-        end
-
-        local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
-        return part and part.Position
-    end
-
-    return nil
-end
 
 local function scanTools()
     local player = Players.LocalPlayer
@@ -124,33 +56,7 @@ local function scanTools()
 end
 
 local function scanTrees()
-    local root = getRoot()
-    local trees = {}
-
-    for _, item in ipairs(Workspace:GetDescendants()) do
-        if (item:IsA("Model") or item:IsA("BasePart")) and isTreeCandidate(item) then
-            local position = getModelPosition(item)
-            local distance = root and position and (root.Position - position).Magnitude or nil
-
-            table.insert(trees, {
-                Name = getDisplayName(item),
-                RawName = item.Name,
-                ClassName = item.ClassName,
-                Path = item:GetFullName(),
-                Distance = distance and math.floor(distance * 10 + 0.5) / 10 or nil,
-            })
-        end
-    end
-
-    table.sort(trees, function(a, b)
-        if a.Distance and b.Distance then
-            return a.Distance < b.Distance
-        end
-
-        return a.Name < b.Name
-    end)
-
-    return trees
+    return TreeScanner.GetClusters()
 end
 
 local function buildSummary(audit)
@@ -163,7 +69,7 @@ local function buildSummary(audit)
     for index = 1, math.min(6, #audit.trees) do
         local tree = audit.trees[index]
         local distance = tree.Distance and (tostring(tree.Distance) .. " studs") or "unknown distance"
-        table.insert(lines, ("%d. %s - %s"):format(index, tree.Name, distance))
+        table.insert(lines, ("%d. %s (%d parts) - %s"):format(index, tree.Name, tree.PartCount or 1, distance))
     end
 
     if #audit.trees == 0 then
@@ -175,7 +81,22 @@ end
 
 local function collectAudit()
     local tools = scanTools()
-    local trees = scanTrees()
+    local trees = {}
+
+    for _, tree in ipairs(scanTrees()) do
+        table.insert(trees, {
+            Name = tree.Name,
+            RawName = tree.RawName,
+            Path = tree.Path,
+            PartCount = tree.PartCount,
+            Distance = tree.Distance,
+            Position = tree.Position and {
+                X = math.floor(tree.Position.X * 10 + 0.5) / 10,
+                Y = math.floor(tree.Position.Y * 10 + 0.5) / 10,
+                Z = math.floor(tree.Position.Z * 10 + 0.5) / 10,
+            } or nil,
+        })
+    end
 
     return {
         generatedAt = os.date("!%Y-%m-%dT%H:%M:%SZ"),
