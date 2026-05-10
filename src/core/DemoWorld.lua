@@ -29,6 +29,7 @@ local DemoWorld = {
     ClickInterval = 0.22,
     LastTreeClick = 0,
     CurrentMoveTarget = nil,
+    CurrentTeleportTarget = nil,
     MoveToIssuedAt = 0,
     PathWaypoints = nil,
     PathIndex = 1,
@@ -586,6 +587,63 @@ local function getTreeStandPosition(targetPosition, rootPosition)
     return targetPosition + away.Unit * 5
 end
 
+local function getSafeTeleportStandPosition(targetPosition, rootPosition)
+    if not targetPosition or not rootPosition then
+        return nil
+    end
+
+    local away = Vector3.new(rootPosition.X - targetPosition.X, 0, rootPosition.Z - targetPosition.Z)
+    if away.Magnitude < 0.1 then
+        away = Vector3.new(1, 0, 0)
+    end
+
+    local base = targetPosition + away.Unit * 5
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local ignore = {}
+    local character = getCharacter()
+    if character then
+        table.insert(ignore, character)
+    end
+    local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
+    if folder then
+        table.insert(ignore, folder)
+    end
+    params.FilterDescendantsInstances = ignore
+
+    local offsets = {
+        Vector3.new(0, 0, 0),
+        Vector3.new(2.5, 0, 0),
+        Vector3.new(-2.5, 0, 0),
+        Vector3.new(0, 0, 2.5),
+        Vector3.new(0, 0, -2.5),
+        Vector3.new(4, 0, 0),
+        Vector3.new(-4, 0, 0),
+        Vector3.new(0, 0, 4),
+        Vector3.new(0, 0, -4),
+    }
+
+    local best
+    local bestDist = math.huge
+    for _, offset in ipairs(offsets) do
+        local probe = base + offset
+        local hit = Workspace:Raycast(probe + Vector3.new(0, 35, 0), Vector3.new(0, -90, 0), params)
+        if hit and hit.Instance and hit.Instance.CanCollide then
+            local yGap = math.abs(hit.Position.Y - targetPosition.Y)
+            if yGap <= 10 then
+                local candidate = Vector3.new(probe.X, hit.Position.Y + 3.2, probe.Z)
+                local dist = getFlatDistance(candidate, targetPosition)
+                if dist >= 3.5 and dist < bestDist then
+                    best = candidate
+                    bestDist = dist
+                end
+            end
+        end
+    end
+
+    return best or (base + Vector3.new(0, 3.2, 0))
+end
+
 local function computePathTo(goalPosition)
     local root = getRoot()
     if not root then
@@ -843,12 +901,15 @@ end
 
 function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
     DemoWorld.AutoCollectRunning = enabled
+    DemoWorld.CurrentTeleportTarget = nil
+
     if not enabled then
         return
     end
 
     removeDemoAxe()
-    DemoWorld.SpawnObjectsAtTreePositions(10)
+    DemoWorld.ClearObjects()
+    DemoWorld.SpawnObjectsAtTreePositions(25)
     DemoWorld.EquipBestAxe()
 
     task.spawn(function()
@@ -857,29 +918,50 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
             DemoWorld.EquipBestAxe()
 
             local root = getRoot()
-            local target = DemoWorld.GetNearestCollectible()
-            local targetPosition = getTreePosition(target)
-
-            if not root or not target or not targetPosition then
+            if not root then
                 task.wait(0.25)
                 continue
             end
 
-            -- TP mode: stand beside the nearest live tree, face it, and keep swinging.
-            -- It stays enabled; once the source tree disappears, GetCollectibles removes
-            -- this marker and the loop automatically picks the next nearest tree.
-            local away = Vector3.new(root.Position.X - targetPosition.X, 0, root.Position.Z - targetPosition.Z)
-            if away.Magnitude < 0.1 then
-                away = Vector3.new(1, 0, 0)
+            local target = DemoWorld.CurrentTeleportTarget
+            if not isLiveTarget(target) then
+                DemoWorld.CurrentTeleportTarget = nil
+                DemoWorld.SpawnObjectsAtTreePositions(25)
+                target = DemoWorld.GetNearestCollectible()
+                if not isLiveTarget(target) then
+                    task.wait(0.35)
+                    continue
+                end
+                DemoWorld.CurrentTeleportTarget = target
             end
 
-            local standPosition = targetPosition + away.Unit * 5 + Vector3.new(0, 2, 0)
-            root.CFrame = CFrame.new(standPosition, Vector3.new(targetPosition.X, standPosition.Y, targetPosition.Z))
+            local targetPosition = getTreePosition(target)
+            if not targetPosition then
+                DemoWorld.CurrentTeleportTarget = nil
+                task.wait(0.15)
+                continue
+            end
+
+            -- TP mode: lock to the selected nearest tree, stand beside the trunk/base,
+            -- swing until that source tree disappears, then pick the next nearest tree.
+            local standPosition = getSafeTeleportStandPosition(targetPosition, root.Position)
+            if standPosition then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = CFrame.new(standPosition, Vector3.new(targetPosition.X, standPosition.Y, targetPosition.Z))
+            end
+
             if Workspace.CurrentCamera then
                 Workspace.CurrentCamera.CFrame = CFrame.new(Workspace.CurrentCamera.CFrame.Position, targetPosition)
             end
 
             damageDemoTree(target, onCollect)
+
+            if not isLiveTarget(target) then
+                DemoWorld.CurrentTeleportTarget = nil
+                DemoWorld.SpawnObjectsAtTreePositions(25)
+            end
+
             task.wait(DemoWorld.ClickInterval)
         end
     end)
