@@ -24,6 +24,12 @@ local DemoWorld = {
     ChopRange = 8,
     ChopInterval = 1 / 3, -- 3 CPS
     LastChop = 0,
+    LockedTrunk = nil,
+    LockedContainer = nil,
+    LockedHitPosition = nil,
+    TargetMarker = nil,
+    LastTargetRefresh = 0,
+    TargetRefreshInterval = 0.5,
 }
 
 local function getPlayer()
@@ -129,14 +135,73 @@ local function getStandPosition(rootPosition, trunkPosition)
 end
 
 
+local function clearTargetMarker()
+    if DemoWorld.TargetMarker then
+        DemoWorld.TargetMarker:Destroy()
+        DemoWorld.TargetMarker = nil
+    end
+end
+
 local function getTrunkAimPosition(trunk)
-    -- Aim at the middle/lower-middle of the actual trunk part.
-    -- Do not target leaves, collision boxes, wheat, seeds, grass, or the mouse cursor location.
+    -- Fixed lower-middle trunk target. This is cached per tree so animated/shaking parts
+    -- do not make the hit point flicker between trunk/leaves/collision boxes.
+    if not trunk then
+        return nil
+    end
+
     return trunk.Position + Vector3.new(0, math.clamp(trunk.Size.Y * 0.15, 1.5, 5), 0)
 end
 
+local function updateTargetMarker(trunk, hitPosition)
+    -- One stable marker only. Do not recreate it every frame.
+    if not trunk or not hitPosition then
+        clearTargetMarker()
+        return
+    end
+
+    local marker = DemoWorld.TargetMarker
+    if not marker or marker.Parent == nil then
+        marker = Instance.new("Part")
+        marker.Name = "IceylandsTreeHitPoint"
+        marker.Shape = Enum.PartType.Ball
+        marker.Size = Vector3.new(0.45, 0.45, 0.45)
+        marker.Anchored = true
+        marker.CanCollide = false
+        marker.CanTouch = false
+        marker.CanQuery = false
+        marker.Transparency = 0.25
+        marker.Material = Enum.Material.Neon
+        marker.Color = Color3.fromRGB(255, 170, 40)
+        marker.Parent = Workspace
+        DemoWorld.TargetMarker = marker
+    end
+
+    marker.Position = hitPosition
+end
+
+local function lockTreeTarget(tree)
+    if not isTreeValid(tree) then
+        DemoWorld.LockedTrunk = nil
+        DemoWorld.LockedContainer = nil
+        DemoWorld.LockedHitPosition = nil
+        clearTargetMarker()
+        return false
+    end
+
+    if DemoWorld.LockedTrunk == tree.Trunk and DemoWorld.LockedContainer == tree.Container then
+        updateTargetMarker(DemoWorld.LockedTrunk, DemoWorld.LockedHitPosition)
+        return true
+    end
+
+    DemoWorld.LockedTrunk = tree.Trunk
+    DemoWorld.LockedContainer = tree.Container
+    DemoWorld.LockedHitPosition = getTrunkAimPosition(tree.Trunk)
+    updateTargetMarker(DemoWorld.LockedTrunk, DemoWorld.LockedHitPosition)
+    return true
+end
+
 local function faceTrunk(root, trunk)
-    local aim = getTrunkAimPosition(trunk)
+    local aim = DemoWorld.LockedHitPosition or getTrunkAimPosition(trunk)
     local flatAim = Vector3.new(aim.X, root.Position.Y, aim.Z)
     if (flatAim - root.Position).Magnitude > 0.1 then
         root.CFrame = CFrame.lookAt(root.Position, flatAim)
@@ -218,9 +283,13 @@ end
 local function clickTrunk(tree)
     local character = getCharacter()
     local root = getRoot()
-    local trunk = tree and tree.Trunk
-    if not character or not root or not trunk then
+    local trunk = DemoWorld.LockedTrunk or (tree and tree.Trunk)
+    if not character or not root or not trunk or not trunk:IsDescendantOf(Workspace) then
         return false
+    end
+
+    if tree then
+        lockTreeTarget(tree)
     end
 
     DemoWorld.EquipBestAxe()
@@ -230,8 +299,9 @@ local function clickTrunk(tree)
         return false
     end
 
-    -- Face the trunk horizontally so normal Tool:Activate logic has the best chance to hit.
-    -- This does not move the camera or use the user's real mouse cursor.
+    -- Face the trunk horizontally only. This does not move the camera or use your real cursor.
+    -- The hit marker/point is locked until the current tree disappears.
+    updateTargetMarker(trunk, DemoWorld.LockedHitPosition or getTrunkAimPosition(trunk))
     faceTrunk(root, trunk)
 
     -- Background-safe chop attempt:
@@ -260,7 +330,12 @@ function DemoWorld.SetMovementDemo(enabled)
     end
 
     DemoWorld.CurrentTree = nil
+    DemoWorld.LockedTrunk = nil
+    DemoWorld.LockedContainer = nil
+    DemoWorld.LockedHitPosition = nil
     DemoWorld.LastMoveTo = 0
+    DemoWorld.LastChop = 0
+    clearTargetMarker()
 
     if not enabled then
         return
@@ -280,12 +355,18 @@ function DemoWorld.SetMovementDemo(enabled)
 
         local tree = DemoWorld.CurrentTree
         if not isTreeValid(tree) then
+            DemoWorld.LockedTrunk = nil
+            DemoWorld.LockedContainer = nil
+            DemoWorld.LockedHitPosition = nil
+            clearTargetMarker()
             tree = setMovementTarget()
         end
 
         if not isTreeValid(tree) then
             return
         end
+
+        lockTreeTarget(tree)
 
         local standPosition = getStandPosition(root.Position, tree.Trunk.Position)
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(standPosition.X, 0, standPosition.Z)).Magnitude
