@@ -232,14 +232,29 @@ local function getStandPosition(tree)
     return base + away.Unit * math.max(4.5, math.min(7, (trunk.Size.X + trunk.Size.Z) * 0.25))
 end
 
-local function getNearestTree(exclude)
-    local trees = TreeScanner.GetClusters(30)
+local function getNearestTree(exclude, forceRefresh)
+    local trees = TreeScanner.GetClusters(25, forceRefresh)
+    local root = getRoot()
+    local bestTree
+    local bestDistance = math.huge
+
     for _, tree in ipairs(trees) do
         if tree ~= exclude and isTreeLive(tree) then
-            return tree
+            local trunk = getTrunk(tree)
+            local pos = trunk and trunk.Position or tree.Position
+            if root and pos then
+                local d = flatDistance(root.Position, pos)
+                if d < bestDistance then
+                    bestDistance = d
+                    bestTree = tree
+                end
+            elseif not bestTree then
+                bestTree = tree
+            end
         end
     end
-    return nil
+
+    return bestTree
 end
 
 function DemoWorld.GetCollectibles()
@@ -251,7 +266,21 @@ function DemoWorld.GetNearestCollectible()
     return tree, tree and tree.Distance or nil
 end
 
-local function pressLeftClick()
+local function pressLeftClick(tree)
+    local camera = Workspace.CurrentCamera
+    local x, y
+
+    if camera and tree then
+        local trunk = getTrunk(tree)
+        if trunk then
+            local screenPos, visible = camera:WorldToViewportPoint(trunk.Position)
+            if visible then
+                x = screenPos.X
+                y = screenPos.Y
+            end
+        end
+    end
+
     if mouse1click then
         pcall(mouse1click)
         return
@@ -264,10 +293,9 @@ local function pressLeftClick()
         return
     end
 
-    local camera = Workspace.CurrentCamera
     local viewportSize = camera and camera.ViewportSize or Vector2.new(800, 600)
-    local x = viewportSize.X / 2
-    local y = viewportSize.Y / 2
+    x = x or (viewportSize.X / 2)
+    y = y or (viewportSize.Y / 2)
 
     pcall(function()
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
@@ -299,7 +327,7 @@ function DemoWorld.ActivateHeldAxe(tree)
         tool:Activate()
     end)
 
-    pressLeftClick()
+    pressLeftClick(tree)
     return true
 end
 
@@ -382,7 +410,11 @@ local function movementTick(state)
     end
 
     if not state.Tree or not isTreeLive(state.Tree) then
-        state.Tree = getNearestTree()
+        if os.clock() < (state.NextScanTime or 0) then
+            return
+        end
+        state.Tree = getNearestTree(nil, true)
+        state.NextScanTime = os.clock() + 1.0
         state.Waypoints = nil
         state.Index = 1
         state.LastPathTime = 0
@@ -426,6 +458,7 @@ local function movementTick(state)
                 toast("Can't pathfind to nearest tree, trying another.", "warn")
             end
             state.Tree = nil
+            state.NextScanTime = os.clock() + 1.0
             return
         end
     end
@@ -481,6 +514,9 @@ function DemoWorld.SetMovementDemo(enabled)
     end
 
     DemoWorld.EquipBestAxe()
+    if TreeScanner.RefreshCache then
+        TreeScanner.RefreshCache(25)
+    end
     local state = {
         Tree = nil,
         Waypoints = nil,
@@ -570,7 +606,7 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
             end
 
             if not DemoWorld.CurrentTPTree or not isTreeLive(DemoWorld.CurrentTPTree) then
-                DemoWorld.CurrentTPTree = getNearestTree()
+                DemoWorld.CurrentTPTree = getNearestTree(nil, true)
                 if DemoWorld.CurrentTPTree and onCollect then
                     onCollect((DemoWorld.CurrentTPTree.Name or "Tree") .. " target", nil)
                 end
@@ -578,7 +614,7 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
 
             local tree = DemoWorld.CurrentTPTree
             if not tree then
-                task.wait(0.5)
+                task.wait(1.0)
                 continue
             end
 
