@@ -55,11 +55,11 @@ local MAX_JUMP_HEIGHT = 5.8
 local MAX_DROP_HEIGHT = 7.5
 local TREE_STAND_MIN_DISTANCE = 5
 local TREE_STAND_MAX_DISTANCE = 11
-local WAYPOINT_REACHED_DISTANCE = 4.6
-local PATH_LOOKAHEAD_DISTANCE = 15
-local MIN_MOVETO_INTERVAL = 0.45
-local STUCK_REPATH_SECONDS = 1.15
-local STUCK_JUMP_SECONDS = 0.65
+local WAYPOINT_REACHED_DISTANCE = 5.2
+local PATH_LOOKAHEAD_DISTANCE = 18
+local MIN_MOVETO_INTERVAL = 0.75
+local STUCK_REPATH_SECONDS = 1.6
+local STUCK_JUMP_SECONDS = 0.9
 
 local function isProbablySaplingOrStump(instance)
     if not instance then
@@ -607,6 +607,12 @@ function DemoWorld.GetCollectibles(forceRefresh)
 end
 
 local function notifyPathWarning(text)
+    local now = os.clock()
+    if now - (DemoWorld.LastPathWarningAt or 0) < 6 then
+        return
+    end
+    DemoWorld.LastPathWarningAt = now
+
     warn("Iceylands: " .. text)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
@@ -820,7 +826,17 @@ local function getTreeStandPosition(startPosition, targetPosition)
     if away.Magnitude < 0.1 then
         away = Vector3.new(1, 0, 0)
     end
-    return targetPosition + away.Unit * 6
+
+    -- Stand beside the trunk on the ground, never on the tree/leaves.
+    -- The previous versions could aim at a model pivot or leaf height, which made
+    -- the character climb/jump upward and get stuck above the tree.
+    local flatStand = targetPosition + away.Unit * 6
+    local groundPos = findGroundAtXZ(flatStand.X, flatStand.Z, math.max(startPosition.Y, targetPosition.Y) + 10)
+    if groundPos then
+        return groundPos + Vector3.new(0, 3.1, 0)
+    end
+
+    return Vector3.new(flatStand.X, startPosition.Y, flatStand.Z)
 end
 
 local function buildRobloxPath(startPosition, targetPosition)
@@ -981,7 +997,8 @@ local function getNearestReachableCollectible()
 end
 
 local function shouldJumpForObstacle(root, direction)
-    if not root or not direction or direction.Magnitude < 0.05 then
+    local humanoid = getHumanoid()
+    if not root or not humanoid or humanoid.FloorMaterial == Enum.Material.Air or not direction or direction.Magnitude < 0.05 then
         return false
     end
 
@@ -1155,7 +1172,7 @@ local function followMovementPath(path, targetPosition)
         end
     end
 
-    local needsJump = action == Enum.PathWaypointAction.Jump or shouldJumpForObstacle(root, moveDirection)
+    local needsJump = action == Enum.PathWaypointAction.Jump
     if needsJump and canJumpNow(humanoid, now) then
         DemoWorld.LastJumpNudgeAt = now
         humanoid.Jump = true
@@ -1250,8 +1267,10 @@ function DemoWorld.SetMovementDemo(enabled)
         end
 
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(targetPosition.X, 0, targetPosition.Z)).Magnitude
+        local verticalToTarget = math.abs(root.Position.Y - targetPosition.Y)
 
-        if flatDistance <= 7 then
+        -- Only start chopping from beside the trunk, not from above the canopy.
+        if flatDistance <= 7 and verticalToTarget <= 9 then
             local humanoid = getHumanoid()
             if humanoid then
                 humanoid:Move(Vector3.zero, false)
