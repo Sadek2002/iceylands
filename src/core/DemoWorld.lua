@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local PathfindingService = game:GetService("PathfindingService")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
@@ -17,6 +18,7 @@ local AxePriority = {
 
 local removeDemoAxe
 local getLiveTreeForMarker
+local getFlatDistance
 
 local DemoWorld = {
     FolderName = "IceylandsDemo",
@@ -28,6 +30,16 @@ local DemoWorld = {
     LastTreeClick = 0,
     CurrentMoveTarget = nil,
     MoveToIssuedAt = 0,
+    PathWaypoints = nil,
+    PathIndex = 1,
+    PathTarget = nil,
+    LastPathCompute = 0,
+    LastPathFailToast = 0,
+    LastStuckCheck = 0,
+    LastStuckPosition = nil,
+    StuckSince = nil,
+    JumpIssuedAt = 0,
+    ToastSink = nil,
     TargetSearchInterval = 0.6,
     LastTargetSearch = 0,
     EquipIssuedAt = 0,
@@ -153,6 +165,17 @@ local function getInstancePosition(instance)
     end
 
     if instance:IsA("Model") then
+        local base = instance:FindFirstChild(instance.Name, true)
+        if base and base:IsA("BasePart") then
+            return base.Position
+        end
+
+        local trunk = instance:FindFirstChild("trunk", true)
+        if trunk and trunk:IsA("BasePart") then
+            -- Use the trunk X/Z but keep the position near the base so we do not walk onto leaves.
+            return Vector3.new(trunk.Position.X, math.max(trunk.Position.Y - (trunk.Size.Y * 0.5), trunk.Position.Y - 12), trunk.Position.Z)
+        end
+
         local ok, pivot = pcall(function()
             return instance:GetPivot()
         end)
@@ -176,28 +199,7 @@ function getLiveTreeForMarker(marker)
         return tree
     end
 
-    -- Fallback: path names can change after a tree is chopped. Treat a nearby known tree as alive.
-    local markerPos = marker.Position
-    local nearest
-    local nearestDistance = 12
-    for _, item in ipairs(Workspace:GetDescendants()) do
-        if (item:IsA("Model") or item:IsA("BasePart")) then
-            local name = string.lower(item.Name)
-            local looksLikeTree = string.find(name, "tree", 1, true) ~= nil
-            if looksLikeTree then
-                local pos = getInstancePosition(item)
-                if pos then
-                    local distance = (Vector3.new(markerPos.X, 0, markerPos.Z) - Vector3.new(pos.X, 0, pos.Z)).Magnitude
-                    if distance < nearestDistance then
-                        nearest = item
-                        nearestDistance = distance
-                    end
-                end
-            end
-        end
-    end
-
-    return nearest
+    return nil
 end
 
 local function getTreePosition(marker)
@@ -549,7 +551,7 @@ function DemoWorld.GetNearestCollectible()
     local nearestDistance = math.huge
 
     for _, item in ipairs(DemoWorld.GetCollectibles()) do
-        local distance = (root.Position - item.Position).Magnitude
+        local distance = getFlatDistance(root.Position, item.Position)
         if distance < nearestDistance then
             nearest = item
             nearestDistance = distance
@@ -557,6 +559,168 @@ function DemoWorld.GetNearestCollectible()
     end
 
     return nearest, nearestDistance
+end
+
+
+local function notifyWarn(message)
+    if DemoWorld.ToastSink then
+        pcall(DemoWorld.ToastSink, message, "warn")
+    else
+        warn("Iceylands: " .. message)
+    end
+end
+
+function DemoWorld.SetToastSink(callback)
+    DemoWorld.ToastSink = callback
+end
+
+function getFlatDistance(a, b)
+    return (Vector3.new(a.X, 0, a.Z) - Vector3.new(b.X, 0, b.Z)).Magnitude
+end
+
+local function getTreeStandPosition(targetPosition, rootPosition)
+    local away = Vector3.new(rootPosition.X - targetPosition.X, 0, rootPosition.Z - targetPosition.Z)
+    if away.Magnitude < 0.1 then
+        away = Vector3.new(1, 0, 0)
+    end
+    return targetPosition + away.Unit * 5
+end
+
+local function computePathTo(goalPosition)
+    local root = getRoot()
+    if not root then
+        return nil
+    end
+
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentCanClimb = true,
+        AgentJumpHeight = 9,
+        AgentMaxSlope = 45,
+        WaypointSpacing = 6,
+        Costs = { Water = math.huge },
+    })
+
+    local ok = pcall(function()
+        path:ComputeAsync(root.Position, goalPosition)
+    end)
+
+    if not ok or path.Status ~= Enum.PathStatus.Success then
+        return nil
+    end
+
+    local waypoints = path:GetWaypoints()
+    if #waypoints < 2 then
+        return nil
+    end
+
+    return waypoints
+end
+
+local function clearMovementPath()
+    DemoWorld.PathWaypoints = nil
+    DemoWorld.PathIndex = 1
+    DemoWorld.PathTarget = nil
+    DemoWorld.LastStuckPosition = nil
+    DemoWorld.StuckSince = nil
+end
+
+local function maybeJumpForStuck(humanoid)
+    local now = os.clock()
+    if now - DemoWorld.JumpIssuedAt < 1.2 then
+        return
+    end
+
+    local state = humanoid:GetState()
+    if state == Enum.HumanoidStateType.Running or state == Enum.HumanoidStateType.RunningNoPhysics or state == Enum.HumanoidStateType.Landed then
+        DemoWorld.JumpIssuedAt = now
+        humanoid.Jump = true
+    end
+end
+
+local function followPathToward(target, targetPosition)
+    local root = getRoot()
+    local humanoid = getHumanoid()
+    if not root or not humanoid or not targetPosition then
+        return false
+    end
+
+    local standPosition = getTreeStandPosition(targetPosition, root.Position)
+    local now = os.clock()
+
+    local shouldRepath = false
+    if DemoWorld.PathTarget ~= target then
+        shouldRepath = true
+    elseif not DemoWorld.PathWaypoints then
+        shouldRepath = true
+    elseif now - DemoWorld.LastPathCompute > 3.0 then
+        shouldRepath = true
+    end
+
+    if shouldRepath and now - DemoWorld.LastPathCompute >= 0.35 then
+        DemoWorld.LastPathCompute = now
+        local waypoints = computePathTo(standPosition)
+        if not waypoints then
+            if now - DemoWorld.LastPathFailToast >= 3.0 then
+                DemoWorld.LastPathFailToast = now
+                notifyWarn("Can't pathfind to nearest tree; trying direct movement")
+            end
+            clearMovementPath()
+            humanoid:MoveTo(standPosition)
+            return true
+        end
+
+        DemoWorld.PathWaypoints = waypoints
+        DemoWorld.PathIndex = 2
+        DemoWorld.PathTarget = target
+        DemoWorld.LastStuckPosition = root.Position
+        DemoWorld.StuckSince = nil
+    end
+
+    local waypoints = DemoWorld.PathWaypoints
+    if not waypoints or not waypoints[DemoWorld.PathIndex] then
+        humanoid:MoveTo(standPosition)
+        return true
+    end
+
+    -- Skip past tiny/behind waypoints so movement stays smooth instead of walking block-by-block.
+    while waypoints[DemoWorld.PathIndex] and getFlatDistance(root.Position, waypoints[DemoWorld.PathIndex].Position) < 4 do
+        DemoWorld.PathIndex += 1
+    end
+
+    local waypoint = waypoints[DemoWorld.PathIndex]
+    if not waypoint then
+        humanoid:MoveTo(standPosition)
+        return true
+    end
+
+    if waypoint.Action == Enum.PathWaypointAction.Jump then
+        maybeJumpForStuck(humanoid)
+    end
+
+    humanoid:MoveTo(waypoint.Position)
+
+    -- Stuck detector: only jump/repath when almost not moving for a while.
+    if now - DemoWorld.LastStuckCheck >= 0.45 then
+        if DemoWorld.LastStuckPosition then
+            local moved = (root.Position - DemoWorld.LastStuckPosition).Magnitude
+            if moved < 0.55 then
+                DemoWorld.StuckSince = DemoWorld.StuckSince or now
+                if now - DemoWorld.StuckSince > 1.0 then
+                    maybeJumpForStuck(humanoid)
+                    DemoWorld.PathWaypoints = nil
+                end
+            else
+                DemoWorld.StuckSince = nil
+            end
+        end
+        DemoWorld.LastStuckCheck = now
+        DemoWorld.LastStuckPosition = root.Position
+    end
+
+    return true
 end
 
 function DemoWorld.SetMovementDemo(enabled)
@@ -567,21 +731,19 @@ function DemoWorld.SetMovementDemo(enabled)
 
     if not enabled then
         DemoWorld.CurrentMoveTarget = nil
+        clearMovementPath()
+        DemoWorld.SetOverlayDemo(nil, false)
         return
     end
 
     DemoWorld.CurrentMoveTarget = nil
     DemoWorld.LastTargetSearch = 0
     DemoWorld.MoveToIssuedAt = 0
+    clearMovementPath()
     equipBestAxeThrottled(true)
-    DemoWorld.SpawnObjectsAtTreePositions(10)
+    DemoWorld.SpawnObjectsAtTreePositions(25)
 
-    -- Optimised movement mode:
-    -- 1) Pick the nearest live tree once.
-    -- 2) Stay locked to that target until it disappears/breaks, even if a closer tree spawns.
-    -- 3) Only rescan after the locked target is gone, instead of scanning every frame.
-    -- 4) Once in axe range, stop walking and only swing/click.
-    DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function(deltaTime)
+    DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function()
         local now = os.clock()
         local root = getRoot()
         if not root then
@@ -592,20 +754,20 @@ function DemoWorld.SetMovementDemo(enabled)
         if not isLiveTarget(target) then
             DemoWorld.CurrentMoveTarget = nil
             target = nil
+            clearMovementPath()
 
             if now - DemoWorld.LastTargetSearch < DemoWorld.TargetSearchInterval then
                 return
             end
 
             DemoWorld.LastTargetSearch = now
-            DemoWorld.SpawnObjectsAtTreePositions(10)
+            DemoWorld.SpawnObjectsAtTreePositions(25)
             target = DemoWorld.GetNearestCollectible()
             if not isLiveTarget(target) then
                 return
             end
 
             DemoWorld.CurrentMoveTarget = target
-            DemoWorld.MoveToIssuedAt = 0
             equipBestAxeThrottled(true)
         else
             equipBestAxeThrottled(false)
@@ -614,10 +776,11 @@ function DemoWorld.SetMovementDemo(enabled)
         local targetPosition = getTreePosition(target)
         if not targetPosition then
             DemoWorld.CurrentMoveTarget = nil
+            clearMovementPath()
             return
         end
 
-        local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(targetPosition.X, 0, targetPosition.Z)).Magnitude
+        local flatDistance = getFlatDistance(root.Position, targetPosition)
 
         if flatDistance <= 7 then
             local humanoid = getHumanoid()
@@ -637,24 +800,7 @@ function DemoWorld.SetMovementDemo(enabled)
             return
         end
 
-        -- Walk toward the locked tree, but only issue movement every ~0.6s to avoid jitter/lag.
-        if now - DemoWorld.MoveToIssuedAt >= 0.6 then
-            DemoWorld.MoveToIssuedAt = now
-            local humanoid = getHumanoid()
-            local direction = Vector3.new(targetPosition.X - root.Position.X, 0, targetPosition.Z - root.Position.Z)
-            local stopPosition = targetPosition
-            if direction.Magnitude > 7 then
-                stopPosition = targetPosition - direction.Unit * 5
-            end
-
-            if humanoid then
-                humanoid:MoveTo(stopPosition)
-            else
-                local step = math.min(flatDistance, 18 * math.max(deltaTime, 1 / 60))
-                local nextPosition = root.Position + direction.Unit * step
-                root.CFrame = CFrame.new(nextPosition, Vector3.new(targetPosition.X, nextPosition.Y, targetPosition.Z))
-            end
-        end
+        followPathToward(target, targetPosition)
     end)
 end
 
