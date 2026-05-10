@@ -40,6 +40,7 @@ The Settings tab currently includes:
 
 - Disable Rendering
 - FPS Boost
+- Toggle UI Key
 - Save Config
 - Load Config
 - Export Config

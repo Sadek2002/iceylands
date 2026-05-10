@@ -209,19 +209,25 @@ function Window.new(root, services)
         fallback.Parent = iconButton
     end
 
-    close.MouseButton1Click:Connect(function()
+    local function minimize()
         TweenService:Create(frame, TweenInfo.new(0.18), { Size = UDim2.fromOffset(520, 390), BackgroundTransparency = 1 }):Play()
         task.wait(0.18)
         frame.Visible = false
         iconButton.Visible = true
-    end)
+    end
 
-    makeDraggableClick(iconButton, iconButton, function()
+    local function restore()
         frame.Visible = true
         frame.Size = UDim2.fromOffset(540, 410)
         frame.BackgroundTransparency = 0.3
         iconButton.Visible = false
         TweenService:Create(frame, TweenInfo.new(0.18), { Size = UDim2.fromOffset(560, 430), BackgroundTransparency = 0.14 }):Play()
+    end
+
+    close.MouseButton1Click:Connect(minimize)
+
+    makeDraggableClick(iconButton, iconButton, function()
+        restore()
     end)
 
     self.Root = root
@@ -230,7 +236,61 @@ function Window.new(root, services)
     self.TabArea = tabArea
     self.BottomArea = bottomArea
     self.Content = content
+    self.Minimize = minimize
+    self.Restore = restore
+    self.HotkeyConnection = nil
+    self.HotkeyCapture = false
     return self
+end
+
+function Window:Toggle()
+    if self.Frame.Visible then
+        self.Minimize()
+    else
+        self.Restore()
+    end
+end
+
+function Window:SetHotkey(keyName)
+    local keyCode
+    for _, item in ipairs(Enum.KeyCode:GetEnumItems()) do
+        if item.Name == keyName then
+            keyCode = item
+            break
+        end
+    end
+
+    if not keyCode then
+        return false
+    end
+
+    if self.HotkeyConnection then
+        self.HotkeyConnection:Disconnect()
+        self.HotkeyConnection = nil
+    end
+
+    self.HotkeyConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or self.HotkeyCapture or UserInputService:GetFocusedTextBox() then
+            return
+        end
+
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == keyCode then
+            self:Toggle()
+        end
+    end)
+
+    return true
+end
+
+function Window:SetHotkeyCapture(enabled)
+    self.HotkeyCapture = enabled
+end
+
+function Window:Destroy()
+    if self.HotkeyConnection then
+        self.HotkeyConnection:Disconnect()
+        self.HotkeyConnection = nil
+    end
 end
 
 function Window:AddTab(name, icon, mount, options)

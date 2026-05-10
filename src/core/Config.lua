@@ -9,6 +9,7 @@ Config.Defaults = {
     ExampleSlider = 75,
     DisableRendering = false,
     FpsBoost = false,
+    ToggleKey = "RightShift",
 }
 
 local function cloneDefaults()

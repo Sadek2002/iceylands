@@ -1,4 +1,5 @@
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 local Runtime = _G.IceylandsLoader
 local Theme = Runtime.LoadModule("src/shared/Theme.lua")
 
@@ -217,6 +218,94 @@ function Components.Button(parent, title, description, buttonText, callback)
 
     button.MouseButton1Click:Connect(callback)
     return card
+end
+
+function Components.Keybind(parent, title, description, initial, callback, captureChanged)
+    local card = Components.Card(parent, 76)
+    local current = initial or "RightShift"
+    local waiting = false
+    local captureConnection
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Position = UDim2.fromOffset(14, 13)
+    titleLabel.Size = UDim2.new(1, -142, 0, 20)
+    titleLabel.Font = Theme.FontBold
+    titleLabel.TextSize = 14
+    titleLabel.TextColor3 = Theme.Colors.Text
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Text = title
+    titleLabel.Parent = card
+
+    local desc = Instance.new("TextLabel")
+    desc.BackgroundTransparency = 1
+    desc.Position = UDim2.fromOffset(14, 38)
+    desc.Size = UDim2.new(1, -142, 0, 18)
+    desc.Font = Theme.Font
+    desc.TextSize = 12
+    desc.TextColor3 = Theme.Colors.Muted
+    desc.TextXAlignment = Enum.TextXAlignment.Left
+    desc.Text = description
+    desc.Parent = card
+
+    local button = Instance.new("TextButton")
+    button.AnchorPoint = Vector2.new(1, 0.5)
+    button.Position = UDim2.new(1, -14, 0.5, 0)
+    button.Size = UDim2.fromOffset(118, 36)
+    button.BackgroundColor3 = Theme.Colors.PanelLight
+    button.BackgroundTransparency = 0.28
+    button.Font = Theme.FontBold
+    button.TextSize = 13
+    button.TextColor3 = Theme.Colors.Text
+    button.Text = current
+    button.Parent = card
+    corner(button, UDim.new(0, 6))
+    stroke(button)
+
+    local control = {}
+
+    function control.SetValue(value)
+        current = value or current
+        button.Text = current
+    end
+
+    local function stopCapture()
+        waiting = false
+        if captureChanged then
+            captureChanged(false)
+        end
+
+        if captureConnection then
+            captureConnection:Disconnect()
+            captureConnection = nil
+        end
+    end
+
+    button.MouseButton1Click:Connect(function()
+        if waiting then
+            stopCapture()
+            button.Text = current
+            return
+        end
+
+        waiting = true
+        button.Text = "Press key..."
+        if captureChanged then
+            captureChanged(true)
+        end
+
+        captureConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed or input.UserInputType ~= Enum.UserInputType.Keyboard or input.KeyCode == Enum.KeyCode.Unknown then
+                return
+            end
+
+            stopCapture()
+            control.SetValue(input.KeyCode.Name)
+            callback(input.KeyCode.Name)
+        end)
+    end)
+
+    return control
 end
 
 return Components

@@ -5,6 +5,8 @@ local Performance = Runtime.LoadModule("src/core/Performance.lua")
 local Settings = {}
 
 function Settings.Mount(parent, services)
+    local keybindControl
+
     Components.Toggle(parent, "Disable Rendering", "Turns off 3D rendering and leaves a plain white backdrop.", services.State.DisableRendering, function(value)
         services.State.DisableRendering = value
         Performance.SetRenderingDisabled(services.Root, value)
@@ -15,6 +17,20 @@ function Settings.Mount(parent, services)
         services.State.FpsBoost = value
         Performance.SetFpsBoost(value)
         services.Toasts:Push(value and "FPS boost enabled" or "FPS boost disabled", "success")
+    end)
+
+    keybindControl = Components.Keybind(parent, "Toggle UI Key", "Press the selected key to open or minimize Iceylands.", services.State.ToggleKey, function(keyName)
+        services.State.ToggleKey = keyName
+
+        if services.Window and services.Window:SetHotkey(keyName) then
+            services.Toasts:Push("Toggle key set to " .. keyName, "success")
+        else
+            services.Toasts:Push("Could not bind " .. keyName, "warn")
+        end
+    end, function(capturing)
+        if services.Window then
+            services.Window:SetHotkeyCapture(capturing)
+        end
     end)
 
     Components.Button(parent, "Save Config", "Stores your current Iceylands settings locally.", "Save", function()
@@ -30,6 +46,15 @@ function Settings.Mount(parent, services)
 
         Performance.SetRenderingDisabled(services.Root, services.State.DisableRendering)
         Performance.SetFpsBoost(services.State.FpsBoost)
+
+        if services.Window then
+            services.Window:SetHotkey(services.State.ToggleKey)
+        end
+
+        if keybindControl then
+            keybindControl.SetValue(services.State.ToggleKey)
+        end
+
         services.Toasts:Push("Config loaded", "success")
     end)
 

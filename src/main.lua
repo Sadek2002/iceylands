@@ -57,8 +57,15 @@ function Main.Start()
     task.wait(1.75)
     loading:Destroy()
 
+    local app
+
     local function destroy()
         Performance.Restore()
+
+        if app then
+            app:Destroy()
+            app = nil
+        end
 
         if getgenv then
             getgenv().IceylandsDestroy = nil
@@ -70,7 +77,7 @@ function Main.Start()
         end
     end
 
-    local app = Window.new(root, {
+    app = Window.new(root, {
         Config = Config,
         State = state,
         Toasts = toasts,
@@ -80,6 +87,7 @@ function Main.Start()
 
     Performance.SetRenderingDisabled(root, state.DisableRendering)
     Performance.SetFpsBoost(state.FpsBoost)
+    app:SetHotkey(state.ToggleKey)
 
     app:AddTab("General", "Home", function(container)
         GeneralTab.Mount(container, {
@@ -98,6 +106,7 @@ function Main.Start()
             Toasts = toasts,
             Destroy = destroy,
             Root = root,
+            Window = app,
         })
     end, { Bottom = true })
     app:SelectTab("General")
