@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 local PathfindingService = game:GetService("PathfindingService")
 
 local Runtime = _G.IceylandsLoader
@@ -298,19 +299,23 @@ function DemoWorld.GetNearestCollectible()
     return tree, tree and tree.Distance or nil
 end
 
+local function getTreeAimPoint(tree)
+    local trunk = getTrunk(tree)
+    if not trunk then
+        return nil
+    end
+
+    -- Click the trunk, not leaves/overlay. Keep the aim low enough that it counts as chopping.
+    return trunk.Position + Vector3.new(0, math.clamp(trunk.Size.Y * 0.22, 2.5, 7), 0)
+end
+
 local function getTreeScreenPoint(tree)
     local camera = Workspace.CurrentCamera
     if not camera then
         return nil, nil, false
     end
 
-    local trunk = getTrunk(tree)
-    local point
-    if trunk then
-        -- Aim slightly above the base. Clicking the leaves/sapling area often does not count as chopping.
-        point = trunk.Position + Vector3.new(0, math.clamp(trunk.Size.Y * 0.28, 3, 9), 0)
-    end
-
+    local point = getTreeAimPoint(tree)
     if not point then
         return nil, nil, false
     end
@@ -320,36 +325,56 @@ local function getTreeScreenPoint(tree)
         return nil, nil, false
     end
 
+    local view = camera.ViewportSize
+    if screenPos.X < 3 or screenPos.Y < 3 or screenPos.X > view.X - 3 or screenPos.Y > view.Y - 3 then
+        return nil, nil, false
+    end
+
     return screenPos.X, screenPos.Y, true
 end
 
-local function pressLeftClick(tree)
+local function aimCameraAtTree(tree)
     local camera = Workspace.CurrentCamera
-    local viewportSize = camera and camera.ViewportSize or Vector2.new(800, 600)
+    local point = getTreeAimPoint(tree)
+    if not camera or not point then
+        return
+    end
+
+    -- This does not use the user's pointer. It only makes the target hittable for virtual clicks.
+    pcall(function()
+        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, point)
+    end)
+end
+
+local function pressLeftClick(tree)
+    aimCameraAtTree(tree)
+    task.wait()
+
     local x, y, visible = getTreeScreenPoint(tree)
+    if not visible then
+        -- Never click the current mouse/center as a fallback; that was toggling UI buttons off.
+        return false
+    end
 
-    x = x or (viewportSize.X / 2)
-    y = y or (viewportSize.Y / 2)
+    local pos = Vector2.new(x, y)
 
-    -- Use every available input path. Some executors ignore tool:Activate(), while some games only
-    -- listen to real mouse down/up. Do not return early after mouse1click.
+    if VirtualUser then
+        pcall(function()
+            VirtualUser:Button1Down(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
+            task.wait(0.045)
+            VirtualUser:Button1Up(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
+        end)
+    end
+
     if VirtualInputManager then
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.035)
+            task.wait(0.045)
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
         end)
     end
 
-    if mouse1press and mouse1release then
-        pcall(function()
-            mouse1press()
-            task.wait(0.035)
-            mouse1release()
-        end)
-    elseif mouse1click then
-        pcall(mouse1click)
-    end
+    return true
 end
 
 local faceTree
@@ -368,21 +393,22 @@ function DemoWorld.ActivateHeldAxe(tree)
         return false
     end
 
-    -- Face first, then use both Tool activation and mouse input.
+    -- Face first, then use Tool activation plus a virtual click at the tree's screen location.
     faceTree(tree)
+    aimCameraAtTree(tree)
 
     pcall(function()
         tool:Activate()
     end)
 
-    pressLeftClick(tree)
+    local clicked = pressLeftClick(tree)
 
     -- A second Activate helps for tools that debounce off the mouse release event.
     pcall(function()
         tool:Activate()
     end)
 
-    return true
+    return clicked
 end
 
 faceTree = function(tree)
@@ -400,8 +426,7 @@ local function chopTree(tree)
 
     DemoWorld.EquipBestAxe()
     faceTree(tree)
-    DemoWorld.ActivateHeldAxe(tree)
-    return true
+    return DemoWorld.ActivateHeldAxe(tree)
 end
 
 local function computePath(toPosition)
@@ -675,7 +700,6 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
                 task.wait(0.35)
             end
         end
-    end)
     end)
 end
 
