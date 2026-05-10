@@ -9,7 +9,7 @@ local DemoWorld = {
     MovementConnection = nil,
     OverlayItems = {},
     AutoCollectRunning = false,
-    HitsRequired = 4,
+    HitsRequired = 3,
 }
 
 local function getCharacter()
@@ -175,6 +175,31 @@ function DemoWorld.EnsureDemoAxe()
     return false
 end
 
+function DemoWorld.ActivateDemoAxe(target)
+    local player = Players.LocalPlayer
+    local character = player and player.Character
+    local tool = character and character:FindFirstChild("Iceylands Demo Axe")
+
+    if not tool then
+        DemoWorld.EnsureDemoAxe()
+        character = player and player.Character
+        tool = character and character:FindFirstChild("Iceylands Demo Axe")
+    end
+
+    if not tool then
+        return false
+    end
+
+    tool:SetAttribute("LastDemoTarget", target and target.Name or "")
+    tool:SetAttribute("DemoSwingCount", (tool:GetAttribute("DemoSwingCount") or 0) + 1)
+
+    pcall(function()
+        tool:Activate()
+    end)
+
+    return true
+end
+
 function DemoWorld.ClearObjects()
     local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     if folder then
@@ -305,6 +330,7 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
                 task.wait(0.25)
             else
                 DemoWorld.EnsureDemoAxe()
+                DemoWorld.ActivateDemoAxe(target)
 
                 local hitsRemaining = target:GetAttribute("HitsRemaining")
                 if type(hitsRemaining) ~= "number" then
