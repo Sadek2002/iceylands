@@ -108,6 +108,10 @@ local function collectAudit()
 end
 
 function Foraging.Mount(parent, services)
+    if DemoWorld.SetToasts then
+        DemoWorld.SetToasts(services.Toasts)
+    end
+
     local audit = collectAudit()
     local _, summaryLabel = Components.TextBlock(parent, "Foraging Audit", buildSummary(audit), 170)
 
@@ -135,7 +139,7 @@ function Foraging.Mount(parent, services)
     end)
 
     Components.Button(parent, "Spawn Tree Positions", "Creates local demo tree points using the audit locations.", "Spawn", function()
-        local count = DemoWorld.SpawnObjectsAtTreePositions(10)
+        local count = DemoWorld.SpawnObjectsAtTreePositions(25)
         if services.State.OverlayDemo then
             DemoWorld.SetOverlayDemo(services.Root, true)
         end
@@ -150,7 +154,7 @@ function Foraging.Mount(parent, services)
         updateUiClickGuard()
 
         if value then
-            local count = DemoWorld.SpawnObjectsAtTreePositions(10)
+            local count = DemoWorld.SpawnObjectsAtTreePositions(25)
             DemoWorld.EquipBestAxe()
 
             if services.State.OverlayDemo then

@@ -30,7 +30,7 @@ local DemoWorld = {
     LastTreeClick = 0,
     CurrentMoveTarget = nil,
     MoveToIssuedAt = 0,
-    TargetSearchInterval = 0.6,
+    TargetSearchInterval = 0.35,
     LastTargetSearch = 0,
     EquipIssuedAt = 0,
     CurrentPath = nil,
@@ -47,6 +47,7 @@ local DemoWorld = {
     LastProgressAt = 0,
     LastStuckRepathAt = 0,
     DirectFallbackIssuedAt = 0,
+    ToastService = nil,
 }
 
 local GRID_SIZE = 3
@@ -55,11 +56,11 @@ local MAX_JUMP_HEIGHT = 5.8
 local MAX_DROP_HEIGHT = 7.5
 local TREE_STAND_MIN_DISTANCE = 5
 local TREE_STAND_MAX_DISTANCE = 11
-local WAYPOINT_REACHED_DISTANCE = 5.2
-local PATH_LOOKAHEAD_DISTANCE = 18
-local MIN_MOVETO_INTERVAL = 0.75
-local STUCK_REPATH_SECONDS = 1.6
-local STUCK_JUMP_SECONDS = 0.9
+local WAYPOINT_REACHED_DISTANCE = 2.75
+local PATH_LOOKAHEAD_DISTANCE = 10
+local MIN_MOVETO_INTERVAL = 0.35
+local STUCK_REPATH_SECONDS = 1.7
+local STUCK_JUMP_SECONDS = 1.0
 
 local function isProbablySaplingOrStump(instance)
     if not instance then
@@ -213,6 +214,32 @@ local function getInstancePosition(instance)
     end
 
     if instance:IsA("Model") then
+        local preferred
+        local lowest
+
+        for _, part in ipairs(instance:GetDescendants()) do
+            if part:IsA("BasePart") then
+                local n = string.lower(part.Name)
+                if string.find(n, "trunk", 1, true)
+                    or string.find(n, "log", 1, true)
+                    or string.find(n, "wood", 1, true) then
+                    preferred = part
+                    break
+                end
+
+                if not lowest or part.Position.Y < lowest.Position.Y then
+                    lowest = part
+                end
+            end
+        end
+
+        if preferred then
+            return preferred.Position
+        end
+        if lowest then
+            return lowest.Position
+        end
+
         local ok, pivot = pcall(function()
             return instance:GetPivot()
         end)
@@ -579,10 +606,10 @@ function DemoWorld.GetCollectibles(forceRefresh)
 
     local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     if not folder then
-        DemoWorld.SpawnObjectsAtTreePositions(10, true)
+        DemoWorld.SpawnObjectsAtTreePositions(25, true)
         folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     elseif forceRefresh or (now - (DemoWorld.LastFullTreeScan or 0)) >= DemoWorld.TreeScanCooldown then
-        DemoWorld.SpawnObjectsAtTreePositions(10, true)
+        DemoWorld.SpawnObjectsAtTreePositions(25, true)
         folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     end
 
@@ -613,14 +640,17 @@ local function notifyPathWarning(text)
     end
     DemoWorld.LastPathWarningAt = now
 
-    warn("Iceylands: " .. text)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = "Tree movement",
-            Text = text,
-            Duration = 3,
-        })
-    end)
+    if DemoWorld.ToastService and type(DemoWorld.ToastService.Push) == "function" then
+        pcall(function()
+            DemoWorld.ToastService:Push(text, "warn")
+        end)
+    else
+        warn("Iceylands: " .. text)
+    end
+end
+
+function DemoWorld.SetToasts(toasts)
+    DemoWorld.ToastService = toasts
 end
 
 local function gridRound(value)
@@ -849,12 +879,12 @@ end
 local function buildRobloxPath(startPosition, targetPosition)
     local standPosition = getTreeStandPosition(startPosition, targetPosition)
     local path = PathfindingService:CreatePath({
-        AgentRadius = 2,
+        AgentRadius = 1.4,
         AgentHeight = 5,
         AgentCanJump = true,
-        AgentJumpHeight = 8,
+        AgentJumpHeight = 7,
         AgentMaxSlope = 45,
-        WaypointSpacing = 6,
+        WaypointSpacing = 4,
     })
 
     local ok = pcall(function()
@@ -974,11 +1004,12 @@ local function getNearestReachableCollectible()
     for _, item in ipairs(DemoWorld.GetCollectibles(false)) do
         if isLiveTarget(item) and (not DemoWorld.IgnoredTargets[item] or DemoWorld.IgnoredTargets[item] < now) then
             local targetPosition = getTreePosition(item)
-            if targetPosition then
+            local sortPosition = (item:IsA("BasePart") and item.Position) or targetPosition
+            if targetPosition and sortPosition then
                 table.insert(candidates, {
                     Item = item,
                     Position = targetPosition,
-                    Distance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(targetPosition.X, 0, targetPosition.Z)).Magnitude,
+                    Distance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(sortPosition.X, 0, sortPosition.Z)).Magnitude,
                 })
             end
         end
@@ -997,7 +1028,7 @@ local function getNearestReachableCollectible()
         end
 
         DemoWorld.IgnoredTargets[candidate.Item] = now + 20
-        notifyPathWarning("Can't pathfind to tree; ignoring it.")
+        notifyPathWarning("Can't pathfind to tree; trying another one.")
     end
 
     return nil, nil
@@ -1067,12 +1098,53 @@ local function canJumpNow(humanoid, now)
     return (now - (DemoWorld.LastJumpNudgeAt or 0)) >= 0.85
 end
 
+local function hasWalkableGroundSegment(fromPosition, toPosition)
+    local flat = Vector3.new(toPosition.X - fromPosition.X, 0, toPosition.Z - fromPosition.Z)
+    local distance = flat.Magnitude
+    if distance < 0.1 then
+        return true
+    end
+
+    -- Narrow bridges need conservative line checks. If we skip too far across
+    -- turns, the character cuts the corner and walks off the bridge/edge.
+    local steps = math.clamp(math.ceil(distance / 2.4), 2, 8)
+    local lastY
+    for i = 1, steps do
+        local alpha = i / steps
+        local sample = fromPosition:Lerp(toPosition, alpha)
+        local ground = findGroundAtXZ(sample.X, sample.Z, math.max(fromPosition.Y, toPosition.Y) + 8)
+        if not ground then
+            return false
+        end
+
+        if lastY then
+            local dy = ground.Y - lastY
+            if dy > MAX_JUMP_HEIGHT or dy < -MAX_DROP_HEIGHT then
+                return false
+            end
+        end
+        lastY = ground.Y
+    end
+
+    return true
+end
+
+local function turnIsSafe(previousDirection, nextDirection)
+    if not previousDirection or previousDirection.Magnitude < 0.05 or nextDirection.Magnitude < 0.05 then
+        return true
+    end
+
+    -- Do not look ahead through sharp turns. This fixes leaving a bridge early.
+    return previousDirection.Unit:Dot(nextDirection.Unit) > 0.78
+end
+
 local function chooseLookaheadWaypoint(path, startIndex, rootPosition)
     local index = startIndex
     local chosen = nil
     local chosenAction = nil
     local traveled = 0
     local lastPos = rootPosition
+    local previousDirection = nil
 
     while index <= #path do
         local point, action = normalizePathPoint(path[index])
@@ -1080,11 +1152,22 @@ local function chooseLookaheadWaypoint(path, startIndex, rootPosition)
             break
         end
 
-        local flatDistance = (Vector3.new(rootPosition.X, 0, rootPosition.Z) - Vector3.new(point.X, 0, point.Z)).Magnitude
-        if flatDistance > 1.5 then
+        local flatOffset = Vector3.new(point.X - lastPos.X, 0, point.Z - lastPos.Z)
+        local fromRootFlat = Vector3.new(point.X - rootPosition.X, 0, point.Z - rootPosition.Z)
+
+        if fromRootFlat.Magnitude > 1.2 then
+            if not turnIsSafe(previousDirection, flatOffset) then
+                break
+            end
+
+            if not hasWalkableGroundSegment(rootPosition, point) then
+                break
+            end
+
             chosen = point
             chosenAction = action
-            traveled += (Vector3.new(point.X, 0, point.Z) - Vector3.new(lastPos.X, 0, lastPos.Z)).Magnitude
+            traveled += flatOffset.Magnitude
+            previousDirection = flatOffset
             lastPos = point
         end
 
@@ -1223,7 +1306,7 @@ function DemoWorld.SetMovementDemo(enabled)
     DemoWorld.LastMoveToPoint = nil
     DemoWorld.IgnoredTargets = {}
     equipBestAxeThrottled(true)
-    DemoWorld.SpawnObjectsAtTreePositions(10, true)
+    DemoWorld.SpawnObjectsAtTreePositions(25, true)
 
     -- Movement mode locks one tree at a time. It does not rescan constantly,
     -- and it releases the target as soon as the original tree is gone/replaced
@@ -1308,7 +1391,7 @@ function DemoWorld.SetMovementDemo(enabled)
                 DemoWorld.IgnoredTargets[target] = now + 20
                 DemoWorld.CurrentMoveTarget = nil
                 DemoWorld.CurrentPath = nil
-                notifyPathWarning("Can't pathfind to tree; ignoring it.")
+                notifyPathWarning("Can't pathfind to tree; trying another one.")
                 return
             end
             DemoWorld.CurrentPath = path
@@ -1330,7 +1413,7 @@ function DemoWorld.SetMovementDemo(enabled)
                 DemoWorld.IgnoredTargets[target] = now + 20
                 DemoWorld.CurrentMoveTarget = nil
                 DemoWorld.CurrentPath = nil
-                notifyPathWarning("Can't pathfind to tree; ignoring it.")
+                notifyPathWarning("Can't pathfind to tree; trying another one.")
             end
             return
         end
@@ -1345,7 +1428,7 @@ function DemoWorld.SetMovementDemo(enabled)
                 DemoWorld.IgnoredTargets[target] = now + 20
                 DemoWorld.CurrentMoveTarget = nil
                 DemoWorld.CurrentPath = nil
-                notifyPathWarning("Can't pathfind to tree; ignoring it.")
+                notifyPathWarning("Can't pathfind to tree; trying another one.")
             end
         end
     end)
@@ -1395,7 +1478,7 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
     end
 
     removeDemoAxe()
-    DemoWorld.SpawnObjectsAtTreePositions(10, true)
+    DemoWorld.SpawnObjectsAtTreePositions(25, true)
     DemoWorld.EquipBestAxe()
 
     task.spawn(function()
