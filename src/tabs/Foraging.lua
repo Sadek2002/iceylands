@@ -119,12 +119,6 @@ function Foraging.Mount(parent, services)
 
     updateUiClickGuard()
 
-    if DemoWorld.SetNotify then
-        DemoWorld.SetNotify(function(message, kind)
-            services.Toasts:Push(message, kind or "warn")
-        end)
-    end
-
     Components.Button(parent, "Refresh Audit", "Rescans visible tree models and local tool names.", "Refresh", function()
         audit = collectAudit()
         summaryLabel.Text = buildSummary(audit)
@@ -151,27 +145,30 @@ function Foraging.Mount(parent, services)
         services.Toasts:Push(count > 0 and ("Spawned " .. count .. " tree demo points") or "No tree positions found", count > 0 and "success" or "warn")
     end)
 
-    Components.Toggle(parent, "Tree Movement", "Walks to the nearest live tree, shows the overlay automatically, and keeps swinging until it breaks.", services.State.MovementDemo, function(value)
+    Components.Toggle(parent, "Tree Movement", "Walks to the nearest live tree marker and keeps swinging until it breaks.", services.State.MovementDemo, function(value)
         services.State.MovementDemo = value
-        services.State.OverlayDemo = value
         updateUiClickGuard()
 
         if value then
-            DemoWorld.ClearObjects()
-            DemoWorld.SetMovementDemo(true)
-            DemoWorld.SetOverlayDemo(services.Root, true)
+            local count = DemoWorld.SpawnObjectsAtTreePositions(10)
             DemoWorld.EquipBestAxe()
-            local count = #DemoWorld.GetCollectibles()
-            services.Toasts:Push(count > 0 and "Tree movement enabled" or "No live trees found", count > 0 and "success" or "warn")
-        else
-            DemoWorld.SetMovementDemo(false)
-            DemoWorld.SetOverlayDemo(services.Root, false)
-            DemoWorld.ClearObjects()
-            services.Toasts:Push("Tree movement disabled", "success")
+
+            if services.State.OverlayDemo then
+                DemoWorld.SetOverlayDemo(services.Root, true)
+            end
+
+            services.Toasts:Push(count > 0 and "Tree points ready" or "Using fallback demo points", count > 0 and "success" or "warn")
         end
+
+        DemoWorld.SetMovementDemo(value)
+        services.Toasts:Push(value and "Tree movement enabled" or "Tree movement disabled", "success")
     end)
 
-
+    Components.Toggle(parent, "Tree Overlay", "Shows labels only on local tree demo points.", services.State.OverlayDemo, function(value)
+        services.State.OverlayDemo = value
+        DemoWorld.SetOverlayDemo(services.Root, value)
+        services.Toasts:Push(value and "Tree overlay enabled" or "Tree overlay disabled", "success")
+    end)
 
     Components.Toggle(parent, "TP To Demo Tree", "Teleports to the nearest live tree marker and keeps swinging until it breaks.", services.State.AutoCollectDemo, function(value)
         services.State.AutoCollectDemo = value
@@ -184,6 +181,16 @@ function Foraging.Mount(parent, services)
             end
         end)
         services.Toasts:Push(value and "Tree demo TP enabled" or "Tree demo TP disabled", "success")
+    end)
+
+    Components.Button(parent, "Clear Tree Overlay", "Removes local tree demo points and labels.", "Clear", function()
+        DemoWorld.Restore()
+        DemoWorld.ClearObjects()
+        services.State.MovementDemo = false
+        services.State.OverlayDemo = false
+        services.State.AutoCollectDemo = false
+        updateUiClickGuard()
+        services.Toasts:Push("Tree demo overlay cleared", "success")
     end)
 end
 

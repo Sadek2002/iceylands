@@ -31,8 +31,6 @@ local DemoWorld = {
     TargetSearchInterval = 0.6,
     LastTargetSearch = 0,
     EquipIssuedAt = 0,
-    Notify = nil,
-    LastWarningAt = 0,
 }
 
 local function isLiveTarget(target)
@@ -70,27 +68,6 @@ end
 local function getHumanoid()
     local character = getCharacter()
     return character and character:FindFirstChildOfClass("Humanoid")
-end
-
-
-local function notify(message, kind)
-    local now = os.clock()
-    if kind == "warn" and now - DemoWorld.LastWarningAt < 3 then
-        return
-    end
-    if kind == "warn" then
-        DemoWorld.LastWarningAt = now
-    end
-
-    if type(DemoWorld.Notify) == "function" then
-        DemoWorld.Notify(message, kind or "warn")
-    else
-        warn("Iceylands: " .. tostring(message))
-    end
-end
-
-function DemoWorld.SetNotify(callback)
-    DemoWorld.Notify = callback
 end
 
 function removeDemoAxe()
@@ -195,18 +172,36 @@ function getLiveTreeForMarker(marker)
 
     local path = marker:GetAttribute("SourceTreePath")
     local tree = resolveWorkspacePath(path)
-    if tree and tree.Parent and (not TreeScanner.IsLiveTreeRoot or TreeScanner.IsLiveTreeRoot(tree)) then
+    if tree and tree.Parent then
         return tree
     end
 
-    return nil
+    -- Fallback: path names can change after a tree is chopped. Treat a nearby known tree as alive.
+    local markerPos = marker.Position
+    local nearest
+    local nearestDistance = 12
+    for _, item in ipairs(Workspace:GetDescendants()) do
+        if (item:IsA("Model") or item:IsA("BasePart")) then
+            local name = string.lower(item.Name)
+            local looksLikeTree = string.find(name, "tree", 1, true) ~= nil
+            if looksLikeTree then
+                local pos = getInstancePosition(item)
+                if pos then
+                    local distance = (Vector3.new(markerPos.X, 0, markerPos.Z) - Vector3.new(pos.X, 0, pos.Z)).Magnitude
+                    if distance < nearestDistance then
+                        nearest = item
+                        nearestDistance = distance
+                    end
+                end
+            end
+        end
+    end
+
+    return nearest
 end
 
 local function getTreePosition(marker)
     local tree = getLiveTreeForMarker(marker)
-    if tree and TreeScanner.GetTreePosition then
-        return TreeScanner.GetTreePosition(tree)
-    end
     return getInstancePosition(tree) or (marker and marker.Position) or nil
 end
 
@@ -248,7 +243,7 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
     DemoWorld.ClearObjects()
 
     local folder = getFolder()
-    local clusters = TreeScanner.GetClusters(maxObjects or 10, true)
+    local clusters = TreeScanner.GetClusters(maxObjects or 10)
 
     local created = 0
     for index, cluster in ipairs(clusters) do
@@ -315,7 +310,7 @@ function DemoWorld.EquipBestAxe()
 
     local tool = DemoWorld.GetBestAxe()
     if not tool then
-        notify("No test axe found in inventory/backpack.", "warn")
+        warn("Iceylands: no test axe found in inventory/backpack.")
         return false
     end
 
@@ -606,7 +601,6 @@ function DemoWorld.SetMovementDemo(enabled)
             DemoWorld.SpawnObjectsAtTreePositions(10)
             target = DemoWorld.GetNearestCollectible()
             if not isLiveTarget(target) then
-                notify("No reachable live tree found.", "warn")
                 return
             end
 
@@ -620,7 +614,6 @@ function DemoWorld.SetMovementDemo(enabled)
         local targetPosition = getTreePosition(target)
         if not targetPosition then
             DemoWorld.CurrentMoveTarget = nil
-            notify("Tree target disappeared; finding another tree.", "warn")
             return
         end
 
