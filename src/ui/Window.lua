@@ -184,14 +184,14 @@ function Window.new(root, services)
     iconButton.Name = "MinimizedIcon"
     iconButton.AnchorPoint = Vector2.new(0.5, 0.5)
     iconButton.Position = UDim2.fromScale(0.5, 0.5)
-    iconButton.Size = UDim2.fromOffset(86, 86)
+    iconButton.Size = UDim2.fromOffset(72, 72)
     iconButton.BackgroundColor3 = Theme.Colors.Black
     iconButton.BackgroundTransparency = 1
     iconButton.Visible = false
-    iconButton.ScaleType = Enum.ScaleType.Fit
+    iconButton.ScaleType = Enum.ScaleType.Crop
     iconButton.Parent = root
 
-    local iconAsset = Assets.Get("SnowflakeCircleSmall")
+    local iconAsset = Assets.Get("SnowflakeCircleLarge")
     if iconAsset then
         iconButton.Image = iconAsset
     else
