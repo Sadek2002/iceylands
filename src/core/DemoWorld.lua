@@ -305,8 +305,46 @@ local function getTreeAimPoint(tree)
         return nil
     end
 
-    -- Click the trunk, not leaves/overlay. Keep the aim low enough that it counts as chopping.
-    return trunk.Position + Vector3.new(0, math.clamp(trunk.Size.Y * 0.22, 2.5, 7), 0)
+    -- Aim at the lower-middle of the trunk. Do not aim at leaves or above the tree.
+    -- The trunk Position is its center, so subtract a little on tall trees.
+    local yOffset = -math.clamp(trunk.Size.Y * 0.22, 2.5, 8)
+    return trunk.Position + Vector3.new(0, yOffset, 0)
+end
+
+local function isPartOfTreeTarget(tree, part)
+    if not tree or not part then
+        return false
+    end
+
+    local inst = tree.Instance
+    local trunk = getTrunk(tree)
+
+    if part == trunk then
+        return true
+    end
+
+    if inst and (part == inst or part:IsDescendantOf(inst)) then
+        local n = string.lower(part.Name)
+        -- Only allow actual wood/trunk pieces. Leaves/honey/crops/overlay parts must never count.
+        return n == "trunk" or n:find("wood") ~= nil or n:find("log") ~= nil or n:find("tree") ~= nil
+    end
+
+    return false
+end
+
+local function screenPointHitsTree(tree, x, y)
+    local camera = Workspace.CurrentCamera
+    if not camera then
+        return false
+    end
+
+    local ray = camera:ViewportPointToRay(x, y)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = { getCharacter(), getFolder() }
+
+    local result = Workspace:Raycast(ray.Origin, ray.Direction * 500, params)
+    return result and isPartOfTreeTarget(tree, result.Instance) or false
 end
 
 local function getTreeScreenPoint(tree)
@@ -333,44 +371,32 @@ local function getTreeScreenPoint(tree)
     return screenPos.X, screenPos.Y, true
 end
 
-local function aimCameraAtTree(tree)
-    local camera = Workspace.CurrentCamera
-    local point = getTreeAimPoint(tree)
-    if not camera or not point then
-        return
-    end
-
-    -- This does not use the user's pointer. It only makes the target hittable for virtual clicks.
-    pcall(function()
-        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, point)
-    end)
-end
-
 local function pressLeftClick(tree)
-    aimCameraAtTree(tree)
-    task.wait()
-
     local x, y, visible = getTreeScreenPoint(tree)
     if not visible then
-        -- Never click the current mouse/center as a fallback; that was toggling UI buttons off.
+        -- Never click the current mouse/center as a fallback. If the trunk is not visible, only Tool:Activate is used.
+        return false
+    end
+
+    -- Safety check: only send a virtual click if that exact screen point raycasts into this tree's trunk/wood.
+    -- This prevents clicking wheat, seeds, UI, ground, or whatever the user's cursor is over.
+    if not screenPointHitsTree(tree, x, y) then
         return false
     end
 
     local pos = Vector2.new(x, y)
 
-    if VirtualUser then
-        pcall(function()
-            VirtualUser:Button1Down(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
-            task.wait(0.045)
-            VirtualUser:Button1Up(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
-        end)
-    end
-
     if VirtualInputManager then
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.045)
+            task.wait(0.035)
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        end)
+    elseif VirtualUser then
+        pcall(function()
+            VirtualUser:Button1Down(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
+            task.wait(0.035)
+            VirtualUser:Button1Up(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
         end)
     end
 
@@ -393,9 +419,9 @@ function DemoWorld.ActivateHeldAxe(tree)
         return false
     end
 
-    -- Face first, then use Tool activation plus a virtual click at the tree's screen location.
+    -- Face the trunk, activate the held axe, then click only if the tree trunk is the verified screen target.
+    -- No camera forcing and no current-mouse fallback, so crops/UI/ground cannot be clicked accidentally.
     faceTree(tree)
-    aimCameraAtTree(tree)
 
     pcall(function()
         tool:Activate()
@@ -403,12 +429,12 @@ function DemoWorld.ActivateHeldAxe(tree)
 
     local clicked = pressLeftClick(tree)
 
-    -- A second Activate helps for tools that debounce off the mouse release event.
+    -- A second Activate helps tools that listen to activation rather than raw mouse input.
     pcall(function()
         tool:Activate()
     end)
 
-    return clicked
+    return true
 end
 
 faceTree = function(tree)
