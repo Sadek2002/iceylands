@@ -1,6 +1,5 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local PathfindingService = game:GetService("PathfindingService")
 local Workspace = game:GetService("Workspace")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Runtime = _G.IceylandsLoader
@@ -326,11 +325,21 @@ function DemoWorld.ActivateHeldAxe(target)
         tool:Activate()
     end)
 
-    pcall(function()
-        if tool:FindFirstChild("RemoteEvent") then
-            tool.RemoteEvent:FireServer(target)
+    -- Some axe tools only chop when their internal remotes are fired. Try common
+    -- RemoteEvent/RemoteFunction descendants with a few safe argument shapes.
+    for _, remote in ipairs(tool:GetDescendants()) do
+        if remote:IsA("RemoteEvent") then
+            pcall(function() remote:FireServer(target) end)
+            pcall(function() remote:FireServer(target, target and target.Position) end)
+            pcall(function() remote:FireServer("hit", target) end)
+            pcall(function() remote:FireServer("swing", target) end)
+        elseif remote:IsA("RemoteFunction") then
+            pcall(function() remote:InvokeServer(target) end)
+            pcall(function() remote:InvokeServer(target, target and target.Position) end)
+            pcall(function() remote:InvokeServer("hit", target) end)
+            pcall(function() remote:InvokeServer("swing", target) end)
         end
-    end)
+    end
 
     return true
 end
@@ -502,11 +511,10 @@ function DemoWorld.SetMovementDemo(enabled)
         DemoWorld.EquipBestAxe()
 
         local root = getRoot()
-        local humanoid = getHumanoid()
         local target = DemoWorld.GetNearestCollectible()
         local targetPosition = getTreePosition(target)
 
-        if not root or not humanoid or not target or not targetPosition then
+        if not root or not target or not targetPosition then
             return
         end
 
@@ -526,11 +534,13 @@ function DemoWorld.SetMovementDemo(enabled)
             return
         end
 
-        -- Walk/path toward the nearest live tree. Re-issue MoveTo occasionally so the toggle stays active.
-        if DemoWorld.CurrentMoveTarget ~= target or os.clock() - DemoWorld.MoveToIssuedAt > 1.25 then
-            DemoWorld.CurrentMoveTarget = target
-            DemoWorld.MoveToIssuedAt = os.clock()
-            humanoid:MoveTo(targetPosition)
+        -- Keep the original smooth movement behavior instead of toggling itself off or
+        -- relying on Humanoid:MoveTo getting stuck.
+        local step = math.min(flatDistance, 18 * math.max(deltaTime, 1 / 60))
+        local direction = Vector3.new(offset.X, 0, offset.Z)
+        if direction.Magnitude > 0 then
+            local nextPosition = root.Position + direction.Unit * step
+            root.CFrame = CFrame.new(nextPosition, Vector3.new(targetPosition.X, nextPosition.Y, targetPosition.Z))
         end
     end)
 end
@@ -596,17 +606,27 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
                 continue
             end
 
-            local distance = (root.Position - targetPosition).Magnitude
-            if distance > 7 then
-                root.CFrame = CFrame.new(targetPosition + Vector3.new(0, 3, 0), targetPosition)
-                task.wait(0.15)
-            else
-                damageDemoTree(target, onCollect)
-                task.wait(DemoWorld.ClickInterval)
+            -- TP mode: teleport to the nearest live tree, face it, and keep swinging
+            -- until that tree disappears. The toggle stays enabled and then picks the
+            -- next nearest tree.
+            local standPosition = targetPosition + Vector3.new(0, 3, 0)
+            root.CFrame = CFrame.new(standPosition, targetPosition)
+            if Workspace.CurrentCamera then
+                Workspace.CurrentCamera.CFrame = CFrame.new(Workspace.CurrentCamera.CFrame.Position, targetPosition)
             end
+
+            damageDemoTree(target, onCollect)
+            task.wait(DemoWorld.ClickInterval)
         end
     end)
 end
+
+-- Compatibility aliases for older Foraging tab names.
+DemoWorld.SetTreeMovementDemo = DemoWorld.SetMovementDemo
+DemoWorld.SetMovement = DemoWorld.SetMovementDemo
+DemoWorld.SetTeleportDemo = DemoWorld.SetAutoCollectDemo
+DemoWorld.SetTreeTeleportDemo = DemoWorld.SetAutoCollectDemo
+DemoWorld.SetAutoCollect = DemoWorld.SetAutoCollectDemo
 
 function DemoWorld.Restore()
     DemoWorld.SetMovementDemo(false)
