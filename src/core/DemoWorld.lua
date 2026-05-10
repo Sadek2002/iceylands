@@ -57,9 +57,9 @@ local TREE_STAND_MIN_DISTANCE = 5
 local TREE_STAND_MAX_DISTANCE = 11
 local WAYPOINT_REACHED_DISTANCE = 4.6
 local PATH_LOOKAHEAD_DISTANCE = 15
-local MIN_MOVETO_INTERVAL = 0.35
+local MIN_MOVETO_INTERVAL = 0.45
 local STUCK_REPATH_SECONDS = 1.15
-local STUCK_JUMP_SECONDS = 0.22
+local STUCK_JUMP_SECONDS = 0.65
 
 local function isProbablySaplingOrStump(instance)
     if not instance then
@@ -1023,6 +1023,26 @@ local function shouldJumpForObstacle(root, direction)
     return false
 end
 
+local function canJumpNow(humanoid, now)
+    if not humanoid then
+        return false
+    end
+
+    local state = humanoid:GetState()
+    if state == Enum.HumanoidStateType.Freefall
+        or state == Enum.HumanoidStateType.Jumping
+        or state == Enum.HumanoidStateType.FallingDown
+        or state == Enum.HumanoidStateType.Ragdoll then
+        return false
+    end
+
+    if humanoid.FloorMaterial == Enum.Material.Air then
+        return false
+    end
+
+    return (now - (DemoWorld.LastJumpNudgeAt or 0)) >= 0.85
+end
+
 local function chooseLookaheadWaypoint(path, startIndex, rootPosition)
     local index = startIndex
     local chosen = nil
@@ -1114,7 +1134,10 @@ local function followMovementPath(path, targetPosition)
         DemoWorld.LastJumpNudgeAt = nil
     else
         local stuckFor = now - (DemoWorld.LastProgressAt or now)
-        if stuckFor > STUCK_JUMP_SECONDS and moveDirection.Magnitude > 0.05 and (now - (DemoWorld.LastJumpNudgeAt or 0)) > 0.22 then
+        if stuckFor > STUCK_JUMP_SECONDS
+            and moveDirection.Magnitude > 0.05
+            and canJumpNow(humanoid, now)
+            and shouldJumpForObstacle(root, moveDirection) then
             DemoWorld.LastJumpNudgeAt = now
             humanoid.Jump = true
             pcall(function()
@@ -1132,9 +1155,9 @@ local function followMovementPath(path, targetPosition)
         end
     end
 
-    if action == Enum.PathWaypointAction.Jump
-        or waypoint.Y - root.Position.Y > 0.35
-        or shouldJumpForObstacle(root, moveDirection) then
+    local needsJump = action == Enum.PathWaypointAction.Jump or shouldJumpForObstacle(root, moveDirection)
+    if needsJump and canJumpNow(humanoid, now) then
+        DemoWorld.LastJumpNudgeAt = now
         humanoid.Jump = true
         pcall(function()
             humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
