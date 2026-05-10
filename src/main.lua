@@ -55,10 +55,22 @@ function Main.Start()
     task.wait(1.75)
     loading:Destroy()
 
+    local function destroy()
+        if getgenv then
+            getgenv().IceylandsDestroy = nil
+        end
+
+        if root then
+            root:Destroy()
+            root = nil
+        end
+    end
+
     local app = Window.new(root, {
         Config = Config,
         State = state,
         Toasts = toasts,
+        Destroy = destroy,
     })
 
     app:AddTab("General", "Home", function(container)
@@ -72,12 +84,6 @@ function Main.Start()
     app:AddTab("Combat", "Lock", function() end)
     app:AddTab("Foraging", "Lock", function() end)
     app:SelectTab("General")
-
-    local function destroy()
-        if root then
-            root:Destroy()
-        end
-    end
 
     if getgenv then
         getgenv().IceylandsDestroy = destroy

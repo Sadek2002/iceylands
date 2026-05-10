@@ -4,6 +4,7 @@ local Runtime = _G.IceylandsLoader
 local Theme = Runtime.LoadModule("src/shared/Theme.lua")
 local Assets = Runtime.LoadModule("src/shared/Assets.lua")
 local Constants = Runtime.LoadModule("src/shared/Constants.lua")
+local SnowflakeSymbol = utf8.char(0x2744)
 
 local Window = {}
 Window.__index = Window
@@ -66,7 +67,7 @@ function Window.new(root, services)
     logo.Position = UDim2.fromOffset(18, 13)
     logo.Size = UDim2.fromOffset(28, 28)
     logo.Font = Theme.FontBold
-    logo.Text = "❄"
+    logo.Text = SnowflakeSymbol
     logo.TextSize = 23
     logo.TextColor3 = Theme.Colors.AccentSoft
     logo.Parent = header
@@ -88,7 +89,7 @@ function Window.new(root, services)
     close.Size = UDim2.fromOffset(32, 32)
     close.BackgroundTransparency = 1
     close.Font = Theme.Font
-    close.Text = "×"
+    close.Text = "X"
     close.TextSize = 26
     close.TextColor3 = Theme.Colors.Text
     close.Parent = header
@@ -113,7 +114,7 @@ function Window.new(root, services)
 
     local content = Instance.new("Frame")
     content.Position = UDim2.fromOffset(164, 56)
-    content.Size = UDim2.new(1, -164, 1, -116)
+    content.Size = UDim2.new(1, -164, 1, -126)
     content.BackgroundTransparency = 1
     content.Parent = frame
 
@@ -146,42 +147,70 @@ function Window.new(root, services)
         fallback.BackgroundTransparency = 1
         fallback.Size = UDim2.fromScale(1, 1)
         fallback.Font = Theme.FontBold
-        fallback.Text = "❄"
+        fallback.Text = SnowflakeSymbol
         fallback.TextSize = 34
         fallback.TextColor3 = Theme.Colors.AccentSoft
         fallback.Parent = iconButton
     end
 
-    local function footerButton(text, x, callback)
+    local footerScroll = Instance.new("ScrollingFrame")
+    footerScroll.BackgroundTransparency = 1
+    footerScroll.BorderSizePixel = 0
+    footerScroll.Position = UDim2.fromOffset(14, 0)
+    footerScroll.Size = UDim2.new(1, -28, 1, 0)
+    footerScroll.CanvasSize = UDim2.fromOffset(0, 0)
+    footerScroll.AutomaticCanvasSize = Enum.AutomaticSize.X
+    footerScroll.ScrollBarThickness = 3
+    footerScroll.ScrollingDirection = Enum.ScrollingDirection.X
+    footerScroll.Parent = footer
+
+    local footerLayout = Instance.new("UIListLayout")
+    footerLayout.FillDirection = Enum.FillDirection.Horizontal
+    footerLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    footerLayout.Padding = UDim.new(0, 12)
+    footerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    footerLayout.Parent = footerScroll
+
+    local function footerButton(text, callback, width)
         local button = Instance.new("TextButton")
-        button.Position = UDim2.new(0, x, 0.5, -19)
-        button.Size = UDim2.fromOffset(150, 38)
+        button.Size = UDim2.fromOffset(width or 142, 38)
         button.BackgroundColor3 = Theme.Colors.PanelLight
         button.BackgroundTransparency = 0.42
         button.Font = Theme.FontBold
         button.TextSize = 13
         button.TextColor3 = Theme.Colors.Text
         button.Text = text
-        button.Parent = footer
+        button.Parent = footerScroll
         Instance.new("UICorner", button).CornerRadius = UDim.new(0, 7)
         button.MouseButton1Click:Connect(callback)
     end
 
-    footerButton("Save Config", 20, function()
+    footerButton("Save Config", function()
         local ok, message = services.Config.Save(services.State)
         services.Toasts:Push(ok and ("Config saved: " .. message) or message, ok and "success" or "warn")
     end)
 
-    footerButton("Load Config", 184, function()
+    footerButton("Load Config", function()
         services.State = services.Config.Load()
         services.Toasts:Push("Config loaded", "success")
     end)
 
-    footerButton("Export Config", 374, function()
+    footerButton("Export Config", function()
         local json = services.Config.Export(services.State)
         local ok = services.Config.Copy(json)
         services.Toasts:Push(ok and "JSON copied" or json, ok and "success" or "warn")
     end)
+
+    footerButton("Kill Script", function()
+        if services.Toasts then
+            services.Toasts:Push("Iceylands removed", "success")
+            task.wait(0.15)
+        end
+
+        if services.Destroy then
+            services.Destroy()
+        end
+    end, 128)
 
     close.MouseButton1Click:Connect(function()
         TweenService:Create(frame, TweenInfo.new(0.18), { Size = UDim2.fromOffset(520, 390), BackgroundTransparency = 1 }):Play()
@@ -258,10 +287,15 @@ function Window:SelectTab(name)
     title.Text = name
     title.Parent = page
 
-    local list = Instance.new("Frame")
+    local list = Instance.new("ScrollingFrame")
     list.Position = UDim2.fromOffset(0, 48)
     list.Size = UDim2.new(1, 0, 1, -48)
     list.BackgroundTransparency = 1
+    list.BorderSizePixel = 0
+    list.CanvasSize = UDim2.fromOffset(0, 0)
+    list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    list.ScrollBarThickness = 4
+    list.ScrollingDirection = Enum.ScrollingDirection.Y
     list.Parent = page
 
     local layout = Instance.new("UIListLayout")
