@@ -7,14 +7,6 @@ local PathfindingService = game:GetService("PathfindingService")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
--- Movement/pathing tuning. These must always exist; missing values caused
--- the nil < number error spam and made the movement loop stall.
-local GRID_SIZE = 3
-local MAX_PATH_RADIUS = 140
-local TREE_STAND_MIN_DISTANCE = 5
-local TREE_STAND_MAX_DISTANCE = 11
-local WAYPOINT_REACHED_DISTANCE = 3.25
-
 local AxePriority = {
     woodAxe = 1,
     stoneAxe = 2,
@@ -54,8 +46,19 @@ local DemoWorld = {
     LastWaypointDistance = math.huge,
     LastProgressAt = 0,
     LastStuckRepathAt = 0,
-    LastPathWarningAt = 0,
+    DirectFallbackIssuedAt = 0,
 }
+
+local GRID_SIZE = 3
+local MAX_PATH_RADIUS = 180
+local MAX_JUMP_HEIGHT = 5.8
+local MAX_DROP_HEIGHT = 7.5
+local TREE_STAND_MIN_DISTANCE = 5
+local TREE_STAND_MAX_DISTANCE = 11
+local WAYPOINT_REACHED_DISTANCE = 4.5
+local MIN_MOVETO_INTERVAL = 1.1
+local STUCK_REPATH_SECONDS = 2.4
+
 local function isProbablySaplingOrStump(instance)
     if not instance then
         return true
@@ -602,10 +605,6 @@ function DemoWorld.GetCollectibles(forceRefresh)
 end
 
 local function notifyPathWarning(text)
-    if os.clock() - (DemoWorld.LastPathWarningAt or 0) < 4 then
-        return
-    end
-    DemoWorld.LastPathWarningAt = os.clock()
     warn("Iceylands: " .. text)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
@@ -866,11 +865,77 @@ local function normalizePathPoint(point)
     return nil, nil
 end
 
+local function getRaycastParams()
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local ignore = {}
+    local character = getCharacter()
+    local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
+    if character then
+        table.insert(ignore, character)
+    end
+    if folder then
+        table.insert(ignore, folder)
+    end
+    params.FilterDescendantsInstances = ignore
+    return params
+end
+
+local function findGroundAtXZ(x, z, yHint)
+    local origin = Vector3.new(x, yHint + 12, z)
+    local result = Workspace:Raycast(origin, Vector3.new(0, -34, 0), getRaycastParams())
+    if result and result.Instance and result.Instance.CanCollide then
+        return result.Position, result.Instance
+    end
+    return nil, nil
+end
+
+local function buildSafeDirectPath(startPosition, targetPosition)
+    local standPosition = getTreeStandPosition(startPosition, targetPosition)
+    local flatStart = Vector3.new(startPosition.X, 0, startPosition.Z)
+    local flatEnd = Vector3.new(standPosition.X, 0, standPosition.Z)
+    local distance = (flatEnd - flatStart).Magnitude
+    if distance < 2 then
+        return { standPosition }
+    end
+
+    -- This is a light fallback only. It prevents standing still when Roblox
+    -- pathfinding has no navmesh for the block map, but it still refuses
+    -- obvious void routes by requiring ground/bridge blocks under each sample.
+    local stepCount = math.clamp(math.ceil(distance / 9), 2, 18)
+    local points = {}
+    local lastGroundY
+
+    for i = 1, stepCount do
+        local alpha = i / stepCount
+        local sample = startPosition:Lerp(standPosition, alpha)
+        local groundPos = findGroundAtXZ(sample.X, sample.Z, math.max(startPosition.Y, targetPosition.Y) + 4)
+        if not groundPos then
+            return nil
+        end
+
+        local walkPos = groundPos + Vector3.new(0, 3.2, 0)
+        if lastGroundY then
+            local dy = walkPos.Y - lastGroundY
+            if dy > 7 or dy < -10 then
+                return nil
+            end
+        end
+
+        table.insert(points, walkPos)
+        lastGroundY = walkPos.Y
+    end
+
+    return points
+end
+
 local function buildMovementPath(startPosition, targetPosition)
-    -- Roblox pathfinding is much smoother and cheaper. The old block-grid
-    -- fallback caused heavy FPS drops after trees broke, so movement now
-    -- ignores a tree if Roblox cannot pathfind to it.
-    return buildRobloxPath(startPosition, targetPosition)
+    local path = buildRobloxPath(startPosition, targetPosition)
+    if path and #path > 0 then
+        return path
+    end
+
+    return buildSafeDirectPath(startPosition, targetPosition)
 end
 
 local function getNearestReachableCollectible()
@@ -898,7 +963,7 @@ local function getNearestReachableCollectible()
         return a.Distance < b.Distance
     end)
 
-    local maxPathChecks = math.min(#candidates, 2)
+    local maxPathChecks = math.min(#candidates, 4)
     for i = 1, maxPathChecks do
         local candidate = candidates[i]
         local path = buildMovementPath(root.Position, candidate.Position)
@@ -913,6 +978,32 @@ local function getNearestReachableCollectible()
     return nil, nil
 end
 
+local function shouldJumpForObstacle(root, direction)
+    if not root or not direction or direction.Magnitude < 0.05 then
+        return false
+    end
+
+    local params = getRaycastParams()
+    local flat = Vector3.new(direction.X, 0, direction.Z)
+    if flat.Magnitude < 0.05 then
+        return false
+    end
+    flat = flat.Unit
+
+    -- Low ray hits the block in front, high ray being clear means it is probably
+    -- a one-block step/ledge that a player would jump onto.
+    local lowOrigin = root.Position + Vector3.new(0, -1.7, 0)
+    local highOrigin = root.Position + Vector3.new(0, 1.2, 0)
+    local lowHit = Workspace:Raycast(lowOrigin, flat * 3.2, params)
+    local highHit = Workspace:Raycast(highOrigin, flat * 3.2, params)
+
+    if lowHit and lowHit.Instance and lowHit.Instance.CanCollide and not highHit then
+        return true
+    end
+
+    return false
+end
+
 local function followMovementPath(path, targetPosition)
     local humanoid = getHumanoid()
     local root = getRoot()
@@ -920,17 +1011,22 @@ local function followMovementPath(path, targetPosition)
         return false, false
     end
 
-    local reachedDistance = tonumber(WAYPOINT_REACHED_DISTANCE) or 3.25
+    pcall(function()
+        humanoid.AutoJumpEnabled = true
+    end)
+
     local index = math.clamp(DemoWorld.CurrentPathIndex or 1, 1, #path)
 
-    -- Advance through already-reached points without forcing a stop per block.
+    -- Skip waypoints we are already close to. This prevents the old stop-start
+    -- block-by-block movement while still preserving turns and jumps.
     while index <= #path do
         local point = normalizePathPoint(path[index])
         if not point then
             break
         end
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(point.X, 0, point.Z)).Magnitude
-        if flatDistance > reachedDistance then
+        local verticalDistance = math.abs(point.Y - root.Position.Y)
+        if flatDistance > WAYPOINT_REACHED_DISTANCE or verticalDistance > 5.5 then
             break
         end
         index += 1
@@ -938,33 +1034,43 @@ local function followMovementPath(path, targetPosition)
 
     DemoWorld.CurrentPathIndex = index
     if index > #path then
+        humanoid:Move(Vector3.zero, false)
         return true, false
     end
 
     local waypoint, action = normalizePathPoint(path[index])
     if not waypoint then
+        humanoid:Move(Vector3.zero, false)
         return true, false
     end
-    local waypointDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(waypoint.X, 0, waypoint.Z)).Magnitude
 
-    -- Stuck detection: if we are not getting closer for a short time, rebuild once.
+    local flatOffset = Vector3.new(waypoint.X - root.Position.X, 0, waypoint.Z - root.Position.Z)
+    local waypointDistance = flatOffset.Magnitude
+    local moveDirection = waypointDistance > 0.05 and flatOffset.Unit or Vector3.zero
+
     local now = os.clock()
-    if waypointDistance + 0.2 < (DemoWorld.LastWaypointDistance or math.huge) then
+    if waypointDistance + 0.25 < (DemoWorld.LastWaypointDistance or math.huge) then
         DemoWorld.LastWaypointDistance = waypointDistance
         DemoWorld.LastProgressAt = now
-    elseif (now - (DemoWorld.LastProgressAt or now)) > 2.2 and (now - (DemoWorld.LastStuckRepathAt or 0)) > 2.5 then
+    elseif (now - (DemoWorld.LastProgressAt or now)) > STUCK_REPATH_SECONDS and (now - (DemoWorld.LastStuckRepathAt or 0)) > 2.8 then
         DemoWorld.LastStuckRepathAt = now
         DemoWorld.LastWaypointDistance = math.huge
         DemoWorld.LastProgressAt = now
+        humanoid:Move(Vector3.zero, false)
         return false, true
     end
 
-    if action == Enum.PathWaypointAction.Jump or waypoint.Y - root.Position.Y > 1.25 then
+    if action == Enum.PathWaypointAction.Jump
+        or waypoint.Y - root.Position.Y > 0.75
+        or shouldJumpForObstacle(root, moveDirection) then
         humanoid.Jump = true
     end
 
-    -- Less spam and smoother motion: MoveTo the current safe waypoint and let Roblox keep walking.
-    if now - DemoWorld.MoveToIssuedAt >= 0.65 then
+    -- Smooth movement: hold movement direction every frame like a real player.
+    -- MoveTo is only a background nudge so Roblox keeps navigating, not a tap.
+    humanoid:Move(moveDirection, false)
+
+    if now - (DemoWorld.MoveToIssuedAt or 0) >= MIN_MOVETO_INTERVAL then
         DemoWorld.MoveToIssuedAt = now
         humanoid:MoveTo(waypoint)
     end
