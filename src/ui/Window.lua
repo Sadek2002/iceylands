@@ -36,6 +36,44 @@ local function makeDraggable(handle, target)
     end)
 end
 
+local function makeDraggableClick(handle, target, onClick)
+    local dragging = false
+    local dragStart
+    local startPos
+    local moved = 0
+
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = target.Position
+            moved = 0
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            moved = math.max(moved, delta.Magnitude)
+            target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if not dragging then
+            return
+        end
+
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+
+            if moved <= 6 then
+                onClick()
+            end
+        end
+    end)
+end
+
 function Window.new(root, services)
     local self = setmetatable({}, Window)
     self.Services = services
@@ -130,19 +168,21 @@ function Window.new(root, services)
     iconButton.Name = "MinimizedIcon"
     iconButton.AnchorPoint = Vector2.new(0.5, 0.5)
     iconButton.Position = UDim2.fromScale(0.5, 0.5)
-    iconButton.Size = UDim2.fromOffset(68, 68)
+    iconButton.Size = UDim2.fromOffset(86, 86)
     iconButton.BackgroundColor3 = Theme.Colors.Black
-    iconButton.BackgroundTransparency = 0.08
+    iconButton.BackgroundTransparency = 1
     iconButton.Visible = false
+    iconButton.ScaleType = Enum.ScaleType.Fit
     iconButton.Parent = root
-    Instance.new("UICorner", iconButton).CornerRadius = UDim.new(1, 0)
-    makeDraggable(iconButton, iconButton)
 
     local iconAsset = Assets.Get("SnowflakeCircleSmall")
     if iconAsset then
         iconButton.Image = iconAsset
     else
+        iconButton.BackgroundTransparency = 0.08
         iconButton.ImageTransparency = 1
+        Instance.new("UICorner", iconButton).CornerRadius = UDim.new(1, 0)
+
         local fallback = Instance.new("TextLabel")
         fallback.BackgroundTransparency = 1
         fallback.Size = UDim2.fromScale(1, 1)
@@ -219,7 +259,7 @@ function Window.new(root, services)
         iconButton.Visible = true
     end)
 
-    iconButton.MouseButton1Click:Connect(function()
+    makeDraggableClick(iconButton, iconButton, function()
         frame.Visible = true
         frame.Size = UDim2.fromOffset(540, 410)
         frame.BackgroundTransparency = 0.3
