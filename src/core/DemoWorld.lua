@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
@@ -10,6 +11,8 @@ local DemoWorld = {
     OverlayItems = {},
     AutoCollectRunning = false,
     HitsRequired = 3,
+    ClickInterval = 0.35,
+    LastTreeClick = 0,
 }
 
 local function getCharacter()
@@ -200,6 +203,54 @@ function DemoWorld.ActivateDemoAxe(target)
     return true
 end
 
+
+local function pressLeftClick()
+    local camera = Workspace.CurrentCamera
+    local viewportSize = camera and camera.ViewportSize or Vector2.new(800, 600)
+    local x = viewportSize.X / 2
+    local y = viewportSize.Y / 2
+
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait()
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+end
+
+local function damageDemoTree(target, onCollect)
+    if not target or target:GetAttribute("Collected") then
+        return false
+    end
+
+    DemoWorld.EnsureDemoAxe()
+    pressLeftClick()
+    DemoWorld.ActivateDemoAxe(target)
+
+    local hitsRemaining = target:GetAttribute("HitsRemaining")
+    if type(hitsRemaining) ~= "number" then
+        hitsRemaining = DemoWorld.HitsRequired
+    end
+
+    hitsRemaining -= 1
+    target:SetAttribute("HitsRemaining", hitsRemaining)
+
+    if onCollect then
+        onCollect(target.Name, hitsRemaining)
+    end
+
+    if hitsRemaining <= 0 then
+        target:SetAttribute("Collected", true)
+        target.Transparency = 1
+        target.CanTouch = false
+        target.CanQuery = false
+        target.CanCollide = false
+    else
+        target.Transparency = math.clamp(0.12 + ((DemoWorld.HitsRequired - hitsRemaining) * 0.16), 0.12, 0.85)
+    end
+
+    return true
+end
+
 function DemoWorld.ClearObjects()
     local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     if folder then
@@ -261,6 +312,13 @@ function DemoWorld.SetMovementDemo(enabled)
 
         local offset = target.Position - root.Position
         if offset.Magnitude <= 4 then
+            root.CFrame = CFrame.new(root.Position, target.Position)
+
+            if os.clock() - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
+                DemoWorld.LastTreeClick = os.clock()
+                damageDemoTree(target)
+            end
+
             return
         end
 
@@ -329,31 +387,12 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
                 root.CFrame = CFrame.new(target.Position + Vector3.new(0, 3, 0))
                 task.wait(0.25)
             else
-                DemoWorld.EnsureDemoAxe()
-                DemoWorld.ActivateDemoAxe(target)
+                damageDemoTree(target, onCollect)
 
-                local hitsRemaining = target:GetAttribute("HitsRemaining")
-                if type(hitsRemaining) ~= "number" then
-                    hitsRemaining = DemoWorld.HitsRequired
-                end
-
-                hitsRemaining -= 1
-                target:SetAttribute("HitsRemaining", hitsRemaining)
-
-                if onCollect then
-                    onCollect(target.Name, hitsRemaining)
-                end
-
-                if hitsRemaining <= 0 then
-                    target:SetAttribute("Collected", true)
-                    target.Transparency = 1
-                    target.CanTouch = false
-                    target.CanQuery = false
-                    target.CanCollide = false
+                if target:GetAttribute("Collected") then
                     task.wait(0.25)
                 else
-                    target.Transparency = math.clamp(0.12 + ((DemoWorld.HitsRequired - hitsRemaining) * 0.16), 0.12, 0.85)
-                    task.wait(0.35)
+                    task.wait(DemoWorld.ClickInterval)
                 end
             end
         end
