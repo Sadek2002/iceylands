@@ -3,7 +3,7 @@ local Components = Runtime.LoadModule("src/ui/Components.lua")
 local DemoWorld = Runtime.LoadModule("src/core/DemoWorld.lua")
 
 local Foraging = {}
-local FORAGING_VERSION = "v45"
+local FORAGING_VERSION = "v46"
 
 local function updateUiClickGuard(services)
     if getgenv then

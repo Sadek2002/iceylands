@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
@@ -136,6 +137,7 @@ end
 
 
 local function clearTargetMarker()
+    -- v46: no visible marker. The previous marker made the target/tree look like it was flickering.
     if DemoWorld.TargetMarker then
         DemoWorld.TargetMarker:Destroy()
         DemoWorld.TargetMarker = nil
@@ -152,31 +154,9 @@ local function getTrunkAimPosition(trunk)
     return trunk.Position + Vector3.new(0, math.clamp(trunk.Size.Y * 0.15, 1.5, 5), 0)
 end
 
-local function updateTargetMarker(trunk, hitPosition)
-    -- One stable marker only. Do not recreate it every frame.
-    if not trunk or not hitPosition then
-        clearTargetMarker()
-        return
-    end
-
-    local marker = DemoWorld.TargetMarker
-    if not marker or marker.Parent == nil then
-        marker = Instance.new("Part")
-        marker.Name = "IceylandsTreeHitPoint"
-        marker.Shape = Enum.PartType.Ball
-        marker.Size = Vector3.new(0.45, 0.45, 0.45)
-        marker.Anchored = true
-        marker.CanCollide = false
-        marker.CanTouch = false
-        marker.CanQuery = false
-        marker.Transparency = 0.25
-        marker.Material = Enum.Material.Neon
-        marker.Color = Color3.fromRGB(255, 170, 40)
-        marker.Parent = Workspace
-        DemoWorld.TargetMarker = marker
-    end
-
-    marker.Position = hitPosition
+local function updateTargetMarker(_, _)
+    -- v46: marker disabled. Chopping still uses the cached trunk hit position internally.
+    clearTargetMarker()
 end
 
 local function lockTreeTarget(tree)
@@ -280,6 +260,26 @@ local function tryTrimRemote(tree)
     return true
 end
 
+local function screenClickHitPosition(hitPosition)
+    local camera = Workspace.CurrentCamera
+    if not camera or not hitPosition then
+        return false
+    end
+
+    local screenPosition, onScreen = camera:WorldToViewportPoint(hitPosition)
+    if not onScreen or screenPosition.Z <= 0 then
+        return false
+    end
+
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(screenPosition.X, screenPosition.Y, 0, true, game, 0)
+        task.wait(0.035)
+        VirtualInputManager:SendMouseButtonEvent(screenPosition.X, screenPosition.Y, 0, false, game, 0)
+    end)
+
+    return true
+end
+
 local function clickTrunk(tree)
     local character = getCharacter()
     local root = getRoot()
@@ -299,19 +299,18 @@ local function clickTrunk(tree)
         return false
     end
 
-    -- Face the trunk horizontally only. This does not move the camera or use your real cursor.
-    -- The hit marker/point is locked until the current tree disappears.
-    updateTargetMarker(trunk, DemoWorld.LockedHitPosition or getTrunkAimPosition(trunk))
+    -- v46: stable chop target. No marker and no camera movement.
+    -- We face only the character body toward the cached trunk point.
+    local hitPosition = DemoWorld.LockedHitPosition or getTrunkAimPosition(trunk)
     faceTrunk(root, trunk)
 
-    -- Background-safe chop attempt:
-    -- 1) Activate the equipped axe.
-    -- 2) Simulate axe-handle contact with the trunk when supported by the executor.
-    -- 3) Also try the known tree trim remote as a fallback.
+    -- Try multiple safe methods at the same fixed trunk point.
+    -- The VIM click is sent at the trunk screen coordinate, not at the user's real cursor position.
     pcall(function()
         tool:Activate()
     end)
 
+    screenClickHitPosition(hitPosition)
     tryTouchHit(tool, trunk)
     tryTrimRemote(tree)
 
