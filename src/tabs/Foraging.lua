@@ -163,8 +163,12 @@ function Foraging.Mount(parent, services)
 
     Components.Toggle(parent, "TP To Demo Tree", "Simulates collection by moving only between local tree demo points.", services.State.AutoCollectDemo, function(value)
         services.State.AutoCollectDemo = value
-        DemoWorld.SetAutoCollectDemo(value, function(name)
-            services.Toasts:Push("Reached " .. name, "success")
+        DemoWorld.SetAutoCollectDemo(value, function(name, hitsRemaining)
+            if hitsRemaining and hitsRemaining > 0 then
+                services.Toasts:Push(name .. " hit, " .. hitsRemaining .. " left", "success")
+            else
+                services.Toasts:Push(name .. " cleared", "success")
+            end
         end)
         services.Toasts:Push(value and "Tree demo TP enabled" or "Tree demo TP disabled", "success")
     end)

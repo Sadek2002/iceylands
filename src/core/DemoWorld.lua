@@ -9,6 +9,7 @@ local DemoWorld = {
     MovementConnection = nil,
     OverlayItems = {},
     AutoCollectRunning = false,
+    HitsRequired = 4,
 }
 
 local function getCharacter()
@@ -87,6 +88,7 @@ function DemoWorld.EnsureObjects()
         local part = makePart("DemoCollectible" .. index, origin + offset, Color3.fromRGB(106, 202, 255))
         part:SetAttribute("IceylandsDemoObject", true)
         part:SetAttribute("Collected", false)
+        part:SetAttribute("HitsRemaining", DemoWorld.HitsRequired)
     end
 
     return folder
@@ -107,6 +109,7 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
         local part = makeTreePoint("DemoTreePoint" .. index, cluster.Position)
         part:SetAttribute("IceylandsDemoObject", true)
         part:SetAttribute("Collected", false)
+        part:SetAttribute("HitsRemaining", DemoWorld.HitsRequired)
         part:SetAttribute("SourceTreeName", cluster.RawName)
         part.Parent = folder
         created += 1
@@ -269,7 +272,8 @@ function DemoWorld.SetOverlayDemo(rootGui, enabled)
         label.Font = Enum.Font.GothamBold
         label.TextSize = 12
         label.TextColor3 = Color3.fromRGB(242, 248, 255)
-        label.Text = part.Name
+        local hits = part:GetAttribute("HitsRemaining")
+        label.Text = hits and (part.Name .. " | " .. hits .. " hits") or part.Name
         label.Parent = billboard
         Instance.new("UICorner", label).CornerRadius = UDim.new(0, 6)
 
@@ -300,14 +304,31 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
                 root.CFrame = CFrame.new(target.Position + Vector3.new(0, 3, 0))
                 task.wait(0.25)
             else
-                target:SetAttribute("Collected", true)
-                target.Transparency = 0.75
-                target.CanTouch = false
-                target.CanQuery = false
-                if onCollect then
-                    onCollect(target.Name)
+                DemoWorld.EnsureDemoAxe()
+
+                local hitsRemaining = target:GetAttribute("HitsRemaining")
+                if type(hitsRemaining) ~= "number" then
+                    hitsRemaining = DemoWorld.HitsRequired
                 end
-                task.wait(0.4)
+
+                hitsRemaining -= 1
+                target:SetAttribute("HitsRemaining", hitsRemaining)
+
+                if onCollect then
+                    onCollect(target.Name, hitsRemaining)
+                end
+
+                if hitsRemaining <= 0 then
+                    target:SetAttribute("Collected", true)
+                    target.Transparency = 1
+                    target.CanTouch = false
+                    target.CanQuery = false
+                    target.CanCollide = false
+                    task.wait(0.25)
+                else
+                    target.Transparency = math.clamp(0.12 + ((DemoWorld.HitsRequired - hitsRemaining) * 0.16), 0.12, 0.85)
+                    task.wait(0.35)
+                end
             end
         end
     end)
