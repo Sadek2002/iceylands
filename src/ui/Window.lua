@@ -36,14 +36,32 @@ local function makeDraggable(handle, target)
     end)
 end
 
-local function makeDraggableClick(handle, target, onClick)
+local function makeDraggableClick(handle, target, onClick, options)
+    options = options or {}
     local dragging = false
     local dragStart
     local startPos
     local moved = 0
 
+    local function isInsideHitArea(position)
+        if not options.CircleHitbox then
+            return true
+        end
+
+        local absolutePosition = handle.AbsolutePosition
+        local absoluteSize = handle.AbsoluteSize
+        local center = absolutePosition + (absoluteSize / 2)
+        local radius = math.min(absoluteSize.X, absoluteSize.Y) * (options.CircleRadiusScale or 0.48)
+
+        return (Vector2.new(position.X, position.Y) - center).Magnitude <= radius
+    end
+
     handle.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if not isInsideHitArea(input.Position) then
+                return
+            end
+
             dragging = true
             dragStart = input.Position
             startPos = target.Position
@@ -184,7 +202,7 @@ function Window.new(root, services)
     iconButton.Name = "MinimizedIcon"
     iconButton.AnchorPoint = Vector2.new(0.5, 0.5)
     iconButton.Position = UDim2.fromScale(0.5, 0.5)
-    iconButton.Size = UDim2.fromOffset(72, 72)
+    iconButton.Size = UDim2.fromOffset(76, 76)
     iconButton.BackgroundColor3 = Theme.Colors.Black
     iconButton.BackgroundTransparency = 1
     iconButton.Visible = false
@@ -194,6 +212,8 @@ function Window.new(root, services)
     local iconAsset = Assets.Get("SnowflakeCircleLarge")
     if iconAsset then
         iconButton.Image = iconAsset
+        iconButton.ImageRectOffset = Vector2.new(56, 56)
+        iconButton.ImageRectSize = Vector2.new(400, 400)
     else
         iconButton.BackgroundTransparency = 0.08
         iconButton.ImageTransparency = 1
@@ -228,7 +248,10 @@ function Window.new(root, services)
 
     makeDraggableClick(iconButton, iconButton, function()
         restore()
-    end)
+    end, {
+        CircleHitbox = true,
+        CircleRadiusScale = 0.47,
+    })
 
     self.Root = root
     self.Frame = frame
