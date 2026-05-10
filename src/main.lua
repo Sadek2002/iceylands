@@ -85,10 +85,6 @@ function Main.Start()
         Root = root,
     })
 
-    Performance.SetRenderingDisabled(root, state.DisableRendering)
-    Performance.SetFpsBoost(state.FpsBoost)
-    app:SetHotkey(state.ToggleKey)
-
     app:AddTab("General", "Home", function(container)
         GeneralTab.Mount(container, {
             Config = Config,
@@ -110,6 +106,23 @@ function Main.Start()
         })
     end, { Bottom = true })
     app:SelectTab("General")
+
+    local perfOk, perfErr = pcall(function()
+        Performance.SetRenderingDisabled(root, state.DisableRendering)
+        Performance.SetFpsBoost(state.FpsBoost)
+    end)
+
+    if not perfOk then
+        warn(Constants.Name .. " performance setup failed: " .. tostring(perfErr))
+    end
+
+    local hotkeyOk, hotkeyErr = pcall(function()
+        return app:SetHotkey(state.ToggleKey)
+    end)
+
+    if not hotkeyOk then
+        warn(Constants.Name .. " hotkey setup failed: " .. tostring(hotkeyErr))
+    end
 
     if getgenv then
         getgenv().IceylandsDestroy = destroy

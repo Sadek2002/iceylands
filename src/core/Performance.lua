@@ -20,9 +20,12 @@ local function captureLighting()
         GlobalShadows = Lighting.GlobalShadows,
         FogEnd = Lighting.FogEnd,
         Brightness = Lighting.Brightness,
-        EnvironmentDiffuseScale = Lighting.EnvironmentDiffuseScale,
-        EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale,
     }
+
+    pcall(function()
+        Performance.LightingState.EnvironmentDiffuseScale = Lighting.EnvironmentDiffuseScale
+        Performance.LightingState.EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale
+    end)
 
     Performance.EffectStates = {}
     for _, item in ipairs(Lighting:GetChildren()) do
@@ -36,11 +39,14 @@ local function captureLighting()
         Performance.TerrainState = {
             Terrain = terrain,
             Decoration = terrain.Decoration,
-            WaterWaveSize = terrain.WaterWaveSize,
-            WaterWaveSpeed = terrain.WaterWaveSpeed,
-            WaterReflectance = terrain.WaterReflectance,
-            WaterTransparency = terrain.WaterTransparency,
         }
+
+        pcall(function()
+            Performance.TerrainState.WaterWaveSize = terrain.WaterWaveSize
+            Performance.TerrainState.WaterWaveSpeed = terrain.WaterWaveSpeed
+            Performance.TerrainState.WaterReflectance = terrain.WaterReflectance
+            Performance.TerrainState.WaterTransparency = terrain.WaterTransparency
+        end)
     end
 end
 
@@ -102,33 +108,57 @@ function Performance.SetFpsBoost(enabled)
         Lighting.GlobalShadows = false
         Lighting.FogEnd = 100000
         Lighting.Brightness = 1
-        Lighting.EnvironmentDiffuseScale = 0
-        Lighting.EnvironmentSpecularScale = 0
+        pcall(function()
+            Lighting.EnvironmentDiffuseScale = 0
+            Lighting.EnvironmentSpecularScale = 0
+        end)
         setEffectsEnabled(false)
 
         local terrain = Workspace:FindFirstChildOfClass("Terrain")
         if terrain then
             terrain.Decoration = false
-            terrain.WaterWaveSize = 0
-            terrain.WaterWaveSpeed = 0
-            terrain.WaterReflectance = 0
-            terrain.WaterTransparency = 1
+            pcall(function()
+                terrain.WaterWaveSize = 0
+                terrain.WaterWaveSpeed = 0
+                terrain.WaterReflectance = 0
+                terrain.WaterTransparency = 1
+            end)
         end
     elseif Performance.LightingState then
         Lighting.GlobalShadows = Performance.LightingState.GlobalShadows
         Lighting.FogEnd = Performance.LightingState.FogEnd
         Lighting.Brightness = Performance.LightingState.Brightness
-        Lighting.EnvironmentDiffuseScale = Performance.LightingState.EnvironmentDiffuseScale
-        Lighting.EnvironmentSpecularScale = Performance.LightingState.EnvironmentSpecularScale
+        pcall(function()
+            if Performance.LightingState.EnvironmentDiffuseScale then
+                Lighting.EnvironmentDiffuseScale = Performance.LightingState.EnvironmentDiffuseScale
+            end
+
+            if Performance.LightingState.EnvironmentSpecularScale then
+                Lighting.EnvironmentSpecularScale = Performance.LightingState.EnvironmentSpecularScale
+            end
+        end)
         restoreEffects()
 
         local state = Performance.TerrainState
         if state and state.Terrain and state.Terrain.Parent then
             state.Terrain.Decoration = state.Decoration
-            state.Terrain.WaterWaveSize = state.WaterWaveSize
-            state.Terrain.WaterWaveSpeed = state.WaterWaveSpeed
-            state.Terrain.WaterReflectance = state.WaterReflectance
-            state.Terrain.WaterTransparency = state.WaterTransparency
+            pcall(function()
+                if state.WaterWaveSize then
+                    state.Terrain.WaterWaveSize = state.WaterWaveSize
+                end
+
+                if state.WaterWaveSpeed then
+                    state.Terrain.WaterWaveSpeed = state.WaterWaveSpeed
+                end
+
+                if state.WaterReflectance then
+                    state.Terrain.WaterReflectance = state.WaterReflectance
+                end
+
+                if state.WaterTransparency then
+                    state.Terrain.WaterTransparency = state.WaterTransparency
+                end
+            end)
         end
     end
 end

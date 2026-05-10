@@ -252,11 +252,28 @@ function Window:Toggle()
 end
 
 function Window:SetHotkey(keyName)
-    local keyCode
-    for _, item in ipairs(Enum.KeyCode:GetEnumItems()) do
-        if item.Name == keyName then
-            keyCode = item
-            break
+    local keyCode = Enum.KeyCode.RightShift
+
+    if type(keyName) == "string" and keyName ~= "" then
+        local directOk, directValue = pcall(function()
+            return Enum.KeyCode[keyName]
+        end)
+
+        if directOk and directValue then
+            keyCode = directValue
+        else
+            local listOk, items = pcall(function()
+                return Enum.KeyCode:GetEnumItems()
+            end)
+
+            if listOk then
+                for _, item in ipairs(items) do
+                    if item.Name == keyName then
+                        keyCode = item
+                        break
+                    end
+                end
+            end
         end
     end
 
