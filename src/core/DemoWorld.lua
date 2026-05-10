@@ -7,6 +7,14 @@ local PathfindingService = game:GetService("PathfindingService")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
+-- Movement/pathing tuning. These must always exist; missing values caused
+-- the nil < number error spam and made the movement loop stall.
+local GRID_SIZE = 3
+local MAX_PATH_RADIUS = 140
+local TREE_STAND_MIN_DISTANCE = 5
+local TREE_STAND_MAX_DISTANCE = 11
+local WAYPOINT_REACHED_DISTANCE = 3.25
+
 local AxePriority = {
     woodAxe = 1,
     stoneAxe = 2,
@@ -46,6 +54,7 @@ local DemoWorld = {
     LastWaypointDistance = math.huge,
     LastProgressAt = 0,
     LastStuckRepathAt = 0,
+    LastPathWarningAt = 0,
 }
 local function isProbablySaplingOrStump(instance)
     if not instance then
@@ -593,6 +602,10 @@ function DemoWorld.GetCollectibles(forceRefresh)
 end
 
 local function notifyPathWarning(text)
+    if os.clock() - (DemoWorld.LastPathWarningAt or 0) < 4 then
+        return
+    end
+    DemoWorld.LastPathWarningAt = os.clock()
     warn("Iceylands: " .. text)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
@@ -907,6 +920,7 @@ local function followMovementPath(path, targetPosition)
         return false, false
     end
 
+    local reachedDistance = tonumber(WAYPOINT_REACHED_DISTANCE) or 3.25
     local index = math.clamp(DemoWorld.CurrentPathIndex or 1, 1, #path)
 
     -- Advance through already-reached points without forcing a stop per block.
@@ -916,7 +930,7 @@ local function followMovementPath(path, targetPosition)
             break
         end
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(point.X, 0, point.Z)).Magnitude
-        if flatDistance > WAYPOINT_REACHED_DISTANCE then
+        if flatDistance > reachedDistance then
             break
         end
         index += 1
