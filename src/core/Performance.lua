@@ -38,8 +38,11 @@ local function captureLighting()
     if terrain then
         Performance.TerrainState = {
             Terrain = terrain,
-            Decoration = terrain.Decoration,
         }
+
+        pcall(function()
+            Performance.TerrainState.Decoration = terrain.Decoration
+        end)
 
         pcall(function()
             Performance.TerrainState.WaterWaveSize = terrain.WaterWaveSize
@@ -116,7 +119,10 @@ function Performance.SetFpsBoost(enabled)
 
         local terrain = Workspace:FindFirstChildOfClass("Terrain")
         if terrain then
-            terrain.Decoration = false
+            pcall(function()
+                terrain.Decoration = false
+            end)
+
             pcall(function()
                 terrain.WaterWaveSize = 0
                 terrain.WaterWaveSpeed = 0
@@ -141,7 +147,12 @@ function Performance.SetFpsBoost(enabled)
 
         local state = Performance.TerrainState
         if state and state.Terrain and state.Terrain.Parent then
-            state.Terrain.Decoration = state.Decoration
+            pcall(function()
+                if state.Decoration ~= nil then
+                    state.Terrain.Decoration = state.Decoration
+                end
+            end)
+
             pcall(function()
                 if state.WaterWaveSize then
                     state.Terrain.WaterWaveSize = state.WaterWaveSize

@@ -34,6 +34,31 @@ local AxePriority = {
     ["Void Mattock"] = 7,
 }
 
+local function isTreeCandidate(item)
+    if TreeNames[item.Name] then
+        return true
+    end
+
+    local name = string.lower(item.Name)
+    if string.match(name, "^tree%d*$") or string.match(name, "^tree%a+$") then
+        return true
+    end
+
+    if item.Parent and item.Parent.Name == "Blocks" and string.find(name, "tree", 1, true) then
+        return true
+    end
+
+    return false
+end
+
+local function getDisplayName(item)
+    if TreeNames[item.Name] then
+        return item.Name
+    end
+
+    return item.Name .. " (client tree part)"
+end
+
 local function getRoot()
     local character = Players.LocalPlayer and Players.LocalPlayer.Character
     return character and character:FindFirstChild("HumanoidRootPart")
@@ -103,12 +128,14 @@ local function scanTrees()
     local trees = {}
 
     for _, item in ipairs(Workspace:GetDescendants()) do
-        if (item:IsA("Model") or item:IsA("BasePart")) and TreeNames[item.Name] then
+        if (item:IsA("Model") or item:IsA("BasePart")) and isTreeCandidate(item) then
             local position = getModelPosition(item)
             local distance = root and position and (root.Position - position).Magnitude or nil
 
             table.insert(trees, {
-                Name = item.Name,
+                Name = getDisplayName(item),
+                RawName = item.Name,
+                ClassName = item.ClassName,
                 Path = item:GetFullName(),
                 Distance = distance and math.floor(distance * 10 + 0.5) / 10 or nil,
             })
