@@ -137,12 +137,12 @@ function Foraging.Mount(parent, services)
         services.Toasts:Push(count > 0 and ("Spawned " .. count .. " tree demo points") or "No tree positions found", count > 0 and "success" or "warn")
     end)
 
-    Components.Toggle(parent, "Tree Movement", "Moves toward Iceylands demo tree points only.", services.State.MovementDemo, function(value)
+    Components.Toggle(parent, "Tree Movement", "Walks to the nearest live tree marker and keeps swinging until it breaks.", services.State.MovementDemo, function(value)
         services.State.MovementDemo = value
 
         if value then
             local count = DemoWorld.SpawnObjectsAtTreePositions(10)
-            DemoWorld.EnsureDemoAxe()
+            DemoWorld.EquipBestAxe()
 
             if services.State.OverlayDemo then
                 DemoWorld.SetOverlayDemo(services.Root, true)
@@ -161,7 +161,7 @@ function Foraging.Mount(parent, services)
         services.Toasts:Push(value and "Tree overlay enabled" or "Tree overlay disabled", "success")
     end)
 
-    Components.Toggle(parent, "TP To Demo Tree", "Simulates collection by moving only between local tree demo points.", services.State.AutoCollectDemo, function(value)
+    Components.Toggle(parent, "TP To Demo Tree", "Teleports to the nearest live tree marker and keeps swinging until it breaks.", services.State.AutoCollectDemo, function(value)
         services.State.AutoCollectDemo = value
         DemoWorld.SetAutoCollectDemo(value, function(name, hitsRemaining)
             if hitsRemaining and hitsRemaining > 0 then

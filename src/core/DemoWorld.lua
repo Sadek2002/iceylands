@@ -21,7 +21,7 @@ local DemoWorld = {
     OverlayItems = {},
     AutoCollectRunning = false,
     HitsRequired = 3,
-    ClickInterval = 0.35,
+    ClickInterval = 0.22,
     LastTreeClick = 0,
     CurrentMoveTarget = nil,
     MoveToIssuedAt = 0,
@@ -233,10 +233,7 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
         created += 1
     end
 
-    if created == 0 then
-        DemoWorld.EnsureObjects()
-    end
-
+    -- Do not create fake/demo trees when no real tree locations are found.
     return created
 end
 
@@ -303,6 +300,38 @@ function DemoWorld.EquipBestAxe()
     return false
 end
 
+-- Backwards-compatible name used by older Foraging.lua builds.
+-- This now equips the best real test axe instead of creating a demo axe.
+function DemoWorld.EnsureDemoAxe()
+    return DemoWorld.EquipBestAxe()
+end
+
+local function getTargetPart(instance)
+    if not instance then
+        return nil
+    end
+
+    if instance:IsA("BasePart") then
+        return instance
+    end
+
+    if instance:IsA("Model") then
+        local preferred
+        for _, part in ipairs(instance:GetDescendants()) do
+            if part:IsA("BasePart") then
+                local n = string.lower(part.Name)
+                if string.find(n, "trunk", 1, true) or string.find(n, "log", 1, true) or string.find(n, "wood", 1, true) then
+                    return part
+                end
+                preferred = preferred or part
+            end
+        end
+        return preferred
+    end
+
+    return instance:FindFirstChildWhichIsA("BasePart", true)
+end
+
 function DemoWorld.ActivateHeldAxe(target)
     local player = Players.LocalPlayer
     local character = player and player.Character
@@ -354,8 +383,9 @@ local function pressLeftClick(target)
         x = viewportSize.X / 2
         y = viewportSize.Y / 2
 
-        if target and target:IsA("BasePart") then
-            local screenPoint, onScreen = camera:WorldToViewportPoint(target.Position)
+        local targetPart = getTargetPart(target)
+        if targetPart then
+            local screenPoint, onScreen = camera:WorldToViewportPoint(targetPart.Position)
             if onScreen then
                 x = screenPoint.X
                 y = screenPoint.Y
@@ -392,7 +422,7 @@ local function damageDemoTree(target, onCollect)
     end
 
     local sourceTree = getLiveTreeForMarker(target)
-    local clickTarget = sourceTree or target
+    local clickTarget = getTargetPart(sourceTree) or getTargetPart(target) or sourceTree or target
 
     DemoWorld.EquipBestAxe()
     pressLeftClick(clickTarget)
@@ -443,8 +473,16 @@ function DemoWorld.ClearObjects()
 end
 
 function DemoWorld.GetCollectibles()
-    local folder = DemoWorld.EnsureObjects()
+    local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
+    if not folder then
+        DemoWorld.SpawnObjectsAtTreePositions(10)
+        folder = Workspace:FindFirstChild(DemoWorld.FolderName)
+    end
+
     local items = {}
+    if not folder then
+        return items
+    end
 
     for _, item in ipairs(folder:GetChildren()) do
         if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
@@ -460,10 +498,12 @@ function DemoWorld.GetCollectibles()
 
     if #items == 0 then
         DemoWorld.SpawnObjectsAtTreePositions(10)
-        folder = getFolder()
-        for _, item in ipairs(folder:GetChildren()) do
-            if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
-                table.insert(items, item)
+        folder = Workspace:FindFirstChild(DemoWorld.FolderName)
+        if folder then
+            for _, item in ipairs(folder:GetChildren()) do
+                if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
+                    table.insert(items, item)
+                end
             end
         end
     end
@@ -606,11 +646,16 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
                 continue
             end
 
-            -- TP mode: teleport to the nearest live tree, face it, and keep swinging
-            -- until that tree disappears. The toggle stays enabled and then picks the
-            -- next nearest tree.
-            local standPosition = targetPosition + Vector3.new(0, 3, 0)
-            root.CFrame = CFrame.new(standPosition, targetPosition)
+            -- TP mode: stand beside the nearest live tree, face it, and keep swinging.
+            -- It stays enabled; once the source tree disappears, GetCollectibles removes
+            -- this marker and the loop automatically picks the next nearest tree.
+            local away = Vector3.new(root.Position.X - targetPosition.X, 0, root.Position.Z - targetPosition.Z)
+            if away.Magnitude < 0.1 then
+                away = Vector3.new(1, 0, 0)
+            end
+
+            local standPosition = targetPosition + away.Unit * 5 + Vector3.new(0, 2, 0)
+            root.CFrame = CFrame.new(standPosition, Vector3.new(targetPosition.X, standPosition.Y, targetPosition.Z))
             if Workspace.CurrentCamera then
                 Workspace.CurrentCamera.CFrame = CFrame.new(Workspace.CurrentCamera.CFrame.Position, targetPosition)
             end
