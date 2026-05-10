@@ -3,153 +3,111 @@ local Workspace = game:GetService("Workspace")
 
 local TreeScanner = {}
 
-local TreeNames = {
-    ["Apple Tree"] = true,
-    ["Avocado Tree"] = true,
-    ["Birch Tree"] = true,
-    ["Cherry Blossom Tree"] = true,
-    ["Hickory Tree"] = true,
-    ["Kiwi Tree"] = true,
-    ["Lemon Tree"] = true,
-    ["Maple Tree"] = true,
-    ["Oak Tree"] = true,
-    ["Orange Tree"] = true,
-    ["Palm Tree"] = true,
-    ["Pine Tree"] = true,
-    ["Plum Tree"] = true,
-    ["Spirit Tree"] = true,
+local TREE_NAMES = {
+    tree1 = true,
+    tree2 = true,
+    tree3 = true,
+    tree4 = true,
+    treeOrange = true,
 }
 
 local function getRoot()
-    local character = Players.LocalPlayer and Players.LocalPlayer.Character
+    local player = Players.LocalPlayer
+    local character = player and player.Character
     return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function isTreeCandidate(item)
-    if TreeNames[item.Name] then
-        return true
-    end
-
-    local name = string.lower(item.Name)
-    if string.match(name, "^tree%d*$") or string.match(name, "^tree%a+$") then
-        return true
-    end
-
-    if item.Parent and item.Parent.Name == "Blocks" and string.find(name, "tree", 1, true) then
-        return true
-    end
-
-    return false
+local function isTreeContainer(obj)
+    return TREE_NAMES[obj.Name] == true
 end
 
-local function getPosition(item)
-    if item:IsA("BasePart") then
-        return item.Position
+local function findTrunk(container)
+    local trunk = container:FindFirstChild("trunk", true)
+    if trunk and trunk:IsA("BasePart") then
+        return trunk
     end
 
-    if item:IsA("Model") then
-        local ok, pivot = pcall(function()
-            return item:GetPivot()
-        end)
-
-        if ok then
-            return pivot.Position
+    for _, child in ipairs(container:GetDescendants()) do
+        if child:IsA("BasePart") and string.lower(child.Name) == "trunk" then
+            return child
         end
     end
 
     return nil
 end
 
-function TreeScanner.GetClusters(maxClusters)
+local function isAliveTree(container, trunk)
+    if not container or not trunk then
+        return false
+    end
+
+    if not container:IsDescendantOf(Workspace) or not trunk:IsDescendantOf(Workspace) then
+        return false
+    end
+
+    return true
+end
+
+local function makeTreeInfo(container, root)
+    local trunk = findTrunk(container)
+    if not isAliveTree(container, trunk) then
+        return nil
+    end
+
+    local position = trunk.Position
+    local distance = root and (root.Position - position).Magnitude or 0
+
+    return {
+        Name = container.Name,
+        RawName = container.Name,
+        Container = container,
+        Model = container,
+        Trunk = trunk,
+        Position = position,
+        Distance = distance,
+        Path = container:GetFullName(),
+        PartCount = #container:GetDescendants(),
+    }
+end
+
+function TreeScanner.GetTrees(maxTrees)
     local root = getRoot()
-    local candidates = {}
+    local scanRoot = Workspace:FindFirstChild("Islands") or Workspace
+    local trees = {}
+    local seen = {}
 
-    for _, item in ipairs(Workspace:GetDescendants()) do
-        if (item:IsA("Model") or item:IsA("BasePart")) and isTreeCandidate(item) then
-            local position = getPosition(item)
-            if position then
-                table.insert(candidates, {
-                    Name = item.Name,
-                    ClassName = item.ClassName,
-                    Path = item:GetFullName(),
-                    Position = position,
-                    Distance = root and (root.Position - position).Magnitude or 0,
-                })
+    for _, obj in ipairs(scanRoot:GetDescendants()) do
+        if isTreeContainer(obj) and not seen[obj] then
+            seen[obj] = true
+            local info = makeTreeInfo(obj, root)
+            if info then
+                table.insert(trees, info)
             end
         end
     end
 
-    table.sort(candidates, function(a, b)
-        return a.Distance < b.Distance
+    table.sort(trees, function(a, b)
+        return (a.Distance or math.huge) < (b.Distance or math.huge)
     end)
 
-    local clusters = {}
-    local clusterRadius = 16
-
-    for _, candidate in ipairs(candidates) do
-        local assigned = false
-
-        for _, cluster in ipairs(clusters) do
-            local flatCandidate = Vector3.new(candidate.Position.X, 0, candidate.Position.Z)
-            local flatCluster = Vector3.new(cluster.Center.X, 0, cluster.Center.Z)
-
-            if (flatCandidate - flatCluster).Magnitude <= clusterRadius then
-                cluster.Count += 1
-                cluster.Sum += candidate.Position
-                cluster.Center = cluster.Sum / cluster.Count
-                cluster.MinY = math.min(cluster.MinY, candidate.Position.Y)
-                table.insert(cluster.RawNames, candidate.Name)
-                table.insert(cluster.Paths, candidate.Path)
-                assigned = true
-                break
-            end
-        end
-
-        if not assigned then
-            table.insert(clusters, {
-                Count = 1,
-                Sum = candidate.Position,
-                Center = candidate.Position,
-                MinY = candidate.Position.Y,
-                Distance = candidate.Distance,
-                RawNames = { candidate.Name },
-                Paths = { candidate.Path },
-            })
-        end
-    end
-
-    local results = {}
-    for index, cluster in ipairs(clusters) do
-        local position = Vector3.new(cluster.Center.X, cluster.MinY + 0.75, cluster.Center.Z)
-        local distance = root and (root.Position - position).Magnitude or cluster.Distance
-
-        table.insert(results, {
-            Name = "Tree Cluster " .. index,
-            RawName = table.concat(cluster.RawNames, ", "),
-            Path = cluster.Paths[1],
-            PartCount = cluster.Count,
-            Position = position,
-            Distance = distance and math.floor(distance * 10 + 0.5) / 10 or nil,
-        })
-    end
-
-    table.sort(results, function(a, b)
-        if a.Distance and b.Distance then
-            return a.Distance < b.Distance
-        end
-
-        return a.Name < b.Name
-    end)
-
-    if maxClusters then
+    if maxTrees then
         local limited = {}
-        for index = 1, math.min(maxClusters, #results) do
-            table.insert(limited, results[index])
+        for index = 1, math.min(maxTrees, #trees) do
+            table.insert(limited, trees[index])
         end
         return limited
     end
 
-    return results
+    return trees
+end
+
+function TreeScanner.GetNearestTree()
+    return TreeScanner.GetTrees(1)[1]
+end
+
+-- Backwards-compatible name used by old UI code.
+function TreeScanner.GetClusters(maxClusters)
+    return TreeScanner.GetTrees(maxClusters)
 end
 
 return TreeScanner

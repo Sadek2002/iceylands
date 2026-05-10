@@ -37,22 +37,16 @@ function LoadingScreen.new(root)
     stroke.Transparency = 0.45
     stroke.Parent = panel
 
-    local iconImage = Assets.Get("SnowflakeLarge")
-    local icon
-    if iconImage then
-        icon = Instance.new("ImageLabel")
-        icon.Image = iconImage
-        icon.BackgroundTransparency = 1
-        icon.Size = UDim2.fromOffset(88, 88)
-    else
-        icon = Instance.new("TextLabel")
-        icon.BackgroundTransparency = 1
-        icon.Font = Theme.FontBold
-        icon.Text = Assets.Fallback.SnowflakeLarge
-        icon.TextColor3 = Theme.Colors.AccentSoft
-        icon.TextSize = 66
-        icon.Size = UDim2.fromOffset(88, 88)
-    end
+    local icon = Instance.new("TextLabel")
+    icon.BackgroundTransparency = 1
+    icon.Font = Theme.FontBold
+    icon.Text = "❄"
+    icon.TextColor3 = Theme.Colors.AccentSoft
+    icon.TextSize = 72
+    icon.TextScaled = false
+    icon.TextXAlignment = Enum.TextXAlignment.Center
+    icon.TextYAlignment = Enum.TextYAlignment.Center
+    icon.Size = UDim2.fromOffset(88, 88)
     icon.AnchorPoint = Vector2.new(0.5, 0)
     icon.Position = UDim2.new(0.5, 0, 0, 36)
     icon.Parent = panel
