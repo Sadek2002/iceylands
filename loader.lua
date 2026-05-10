@@ -7,11 +7,14 @@ local REPO = "iceylands"
 local BRANCH = "main"
 
 local baseUrl = ("https://raw.githubusercontent.com/%s/%s/refs/heads/%s/"):format(OWNER, REPO, BRANCH)
+local cacheBust = tostring(os.time())
 local cache = {}
 
 local function fetch(path)
+    local separator = string.find(path, "?", 1, true) and "&" or "?"
+
     local ok, result = pcall(function()
-        return game:HttpGet(baseUrl .. path)
+        return game:HttpGet(baseUrl .. path .. separator .. "v=" .. cacheBust)
     end)
 
     if not ok or type(result) ~= "string" or result == "" then
