@@ -21,6 +21,11 @@ local function getRoot()
     return character and character:FindFirstChild("HumanoidRootPart")
 end
 
+local function getHumanoid()
+    local character = getCharacter()
+    return character and character:FindFirstChildOfClass("Humanoid")
+end
+
 local function getFolder()
     local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     if not folder then
@@ -112,6 +117,59 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
     end
 
     return created
+end
+
+function DemoWorld.EnsureDemoAxe()
+    local player = Players.LocalPlayer
+    local backpack = player and player:FindFirstChild("Backpack")
+    if not player or not backpack then
+        return false
+    end
+
+    local tool = backpack:FindFirstChild("Iceylands Demo Axe")
+    local character = player.Character
+    if not tool and character then
+        tool = character:FindFirstChild("Iceylands Demo Axe")
+    end
+
+    if not tool then
+        tool = Instance.new("Tool")
+        tool.Name = "Iceylands Demo Axe"
+        tool.RequiresHandle = true
+        tool.CanBeDropped = false
+
+        local handle = Instance.new("Part")
+        handle.Name = "Handle"
+        handle.Size = Vector3.new(0.35, 3, 0.35)
+        handle.Color = Color3.fromRGB(145, 91, 45)
+        handle.Material = Enum.Material.Wood
+        handle.Parent = tool
+
+        local head = Instance.new("Part")
+        head.Name = "DemoAxeHead"
+        head.Size = Vector3.new(1.2, 0.55, 0.25)
+        head.Color = Color3.fromRGB(172, 222, 255)
+        head.Material = Enum.Material.Ice
+        head.CanCollide = false
+        head.Massless = true
+        head.Parent = tool
+
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = handle
+        weld.Part1 = head
+        weld.Parent = head
+        head.CFrame = handle.CFrame * CFrame.new(0, 1.1, 0)
+
+        tool.Parent = backpack
+    end
+
+    local humanoid = getHumanoid()
+    if humanoid then
+        humanoid:EquipTool(tool)
+        return true
+    end
+
+    return false
 end
 
 function DemoWorld.ClearObjects()

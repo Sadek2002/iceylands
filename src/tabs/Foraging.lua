@@ -139,6 +139,18 @@ function Foraging.Mount(parent, services)
 
     Components.Toggle(parent, "Tree Movement", "Moves toward Iceylands demo tree points only.", services.State.MovementDemo, function(value)
         services.State.MovementDemo = value
+
+        if value then
+            local count = DemoWorld.SpawnObjectsAtTreePositions(10)
+            DemoWorld.EnsureDemoAxe()
+
+            if services.State.OverlayDemo then
+                DemoWorld.SetOverlayDemo(services.Root, true)
+            end
+
+            services.Toasts:Push(count > 0 and "Tree points ready" or "Using fallback demo points", count > 0 and "success" or "warn")
+        end
+
         DemoWorld.SetMovementDemo(value)
         services.Toasts:Push(value and "Tree movement enabled" or "Tree movement disabled", "success")
     end)
