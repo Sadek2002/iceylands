@@ -9,7 +9,7 @@ This first version intentionally contains only UI and harmless placeholder contr
 After publishing this repository, update `loader.lua` with your GitHub owner name, then run:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/GITHUB_OWNER/iceylands/refs/heads/main/loader.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Sadek2002/iceylands/refs/heads/main/loader.lua"))()
 ```
 
 ## Game Lock

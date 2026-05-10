@@ -1,8 +1,8 @@
 -- Iceylands remote loader
--- Replace GITHUB_OWNER before publishing:
--- loadstring(game:HttpGet("https://raw.githubusercontent.com/GITHUB_OWNER/iceylands/refs/heads/main/loader.lua"))()
+-- Private repo development URL:
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/Sadek2002/iceylands/refs/heads/main/loader.lua"))()
 
-local OWNER = "GITHUB_OWNER"
+local OWNER = "Sadek2002"
 local REPO = "iceylands"
 local BRANCH = "main"
 
