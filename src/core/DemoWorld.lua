@@ -517,13 +517,17 @@ local function maybeJumpForLedge(state, root, humanoid, moveTarget)
     if not grounded(humanoid) or humanoid.FloorMaterial == Enum.Material.Air then
         return false
     end
+    if os.clock() - (state.LastLedgeProbe or 0) < 0.12 then
+        return false
+    end
+    state.LastLedgeProbe = os.clock()
 
     local delta = Vector3.new(moveTarget.X - root.Position.X, 0, moveTarget.Z - root.Position.Z)
-    if delta.Magnitude < 0.75 then
+    if delta.Magnitude < 1.0 then
         return false
     end
 
-    local baseDir = delta.Unit
+    local dir = delta.Unit
     local ignore = {getCharacter()}
     local currentGroundY = getGroundYAt(root.Position, ignore)
     if not currentGroundY then
@@ -534,44 +538,38 @@ local function maybeJumpForLedge(state, root, humanoid, moveTarget)
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = ignore
 
-    -- Probe a small fan in front of the character. The game uses 3x3 blocks,
-    -- so a single center ray often misses the corner of the ledge and the bot
-    -- just pushes into it. These rays detect the actual block face in front.
-    local angles = {0, math.rad(18), math.rad(-18), math.rad(34), math.rad(-34)}
-    for _, angle in ipairs(angles) do
-        local dir = rotateFlat(baseDir, angle)
+    -- Only auto-jump when there is an actual ledge directly in front.
+    -- Older versions sampled too far ahead / too wide and jumped just because a future tile was higher.
+    local wallHit = Workspace:Raycast(root.Position + Vector3.new(0, 1.15, 0), dir * 2.6, params)
+    if wallHit and wallHit.Instance and wallHit.Instance.CanCollide then
+        local part = wallHit.Instance
+        local topY = part.Position.Y + part.Size.Y / 2
+        local climb = topY - currentGroundY
 
-        -- If the next tile ahead is one block higher, jump before the wall stops movement.
-        for _, dist in ipairs({2.25, 3.25, 4.25, 5.25}) do
-            local probe = root.Position + dir * dist
-            local nextGroundY = getGroundYAt(probe, ignore)
-            if nextGroundY then
-                local climb = nextGroundY - currentGroundY
-                if climb > 0.65 and climb <= 4.75 then
-                    return requestJump(state, humanoid)
-                elseif climb > 4.75 then
-                    state.Waypoints = nil
-                    state.LastPathTime = 0
-                    return false
-                end
-            end
+        -- The block world uses ~3 stud vertical steps. Jump only for reachable ledges.
+        if climb > 0.7 and climb <= 4.2 then
+            return requestJump(state, humanoid)
         end
 
-        -- Detect a block face directly in front, then compare its top to the floor.
-        for _, height in ipairs({0.75, 1.45, 2.25}) do
-            local wallHit = Workspace:Raycast(root.Position + Vector3.new(0, height, 0), dir * 3.8, params)
-            if wallHit and wallHit.Instance and wallHit.Instance.CanCollide then
-                local part = wallHit.Instance
-                local topY = part.Position.Y + part.Size.Y / 2
-                local climb = topY - currentGroundY
-                if climb > 0.65 and climb <= 4.75 then
-                    return requestJump(state, humanoid)
-                elseif climb > 4.75 then
-                    state.Waypoints = nil
-                    state.LastPathTime = 0
-                    return false
-                end
-            end
+        -- Too high: force a new Roblox path instead of jump-spamming.
+        if climb > 4.2 then
+            state.Waypoints = nil
+            state.LastPathTime = 0
+        end
+        return false
+    end
+
+    -- If there is no wall ray hit, only jump when the immediate next floor tile is higher.
+    -- This handles walking up a block edge where the ray slips over the lip.
+    local probe = root.Position + dir * 2.75
+    local nextGroundY = getGroundYAt(probe, ignore)
+    if nextGroundY then
+        local climb = nextGroundY - currentGroundY
+        if climb > 0.9 and climb <= 4.2 then
+            return requestJump(state, humanoid)
+        elseif climb > 4.2 then
+            state.Waypoints = nil
+            state.LastPathTime = 0
         end
     end
 
@@ -668,7 +666,7 @@ local function movementTick(state)
                 humanoid:MoveTo(target)
                 maybeJumpForLedge(state, root, humanoid, target)
                 if waypoint.Action == Enum.PathWaypointAction.Jump then
-                    jumpIfStuck(state, humanoid)
+                    requestJump(state, humanoid)
                 end
             end
         else
@@ -678,7 +676,6 @@ local function movementTick(state)
 
     if maybeStuck(state, root) then
         maybeJumpForLedge(state, root, humanoid, stand)
-        jumpIfStuck(state, humanoid)
         state.Waypoints = nil
         state.LastPathTime = 0
     end
