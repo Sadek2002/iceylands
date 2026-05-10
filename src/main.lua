@@ -185,6 +185,10 @@ function Main.Start()
         Performance.Restore()
         DemoWorld.Restore()
 
+        if getgenv then
+            getgenv().IceylandsIgnoreReopenClicks = nil
+        end
+
         if app then
             app:Destroy()
             app = nil
@@ -260,6 +264,10 @@ function Main.Start()
         DemoWorld.SetAutoCollectDemo(state.AutoCollectDemo, function(name)
             toasts:Push("Collected " .. name, "success")
         end)
+
+        if getgenv then
+            getgenv().IceylandsIgnoreReopenClicks = state.MovementDemo or state.AutoCollectDemo
+        end
     end)
 
     if getgenv then

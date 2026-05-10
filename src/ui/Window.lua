@@ -245,6 +245,10 @@ function Window.new(root, services)
     close.MouseButton1Click:Connect(minimize)
 
     makeDraggableClick(iconButton, iconButton, function()
+        if getgenv and getgenv().IceylandsIgnoreReopenClicks then
+            return
+        end
+
         restore()
     end, {
         CircleHitbox = true,

@@ -111,6 +111,14 @@ function Foraging.Mount(parent, services)
     local audit = collectAudit()
     local _, summaryLabel = Components.TextBlock(parent, "Foraging Audit", buildSummary(audit), 170)
 
+    local function updateUiClickGuard()
+        if getgenv then
+            getgenv().IceylandsIgnoreReopenClicks = services.State.MovementDemo or services.State.AutoCollectDemo
+        end
+    end
+
+    updateUiClickGuard()
+
     Components.Button(parent, "Refresh Audit", "Rescans visible tree models and local tool names.", "Refresh", function()
         audit = collectAudit()
         summaryLabel.Text = buildSummary(audit)
@@ -139,6 +147,7 @@ function Foraging.Mount(parent, services)
 
     Components.Toggle(parent, "Tree Movement", "Walks to the nearest live tree marker and keeps swinging until it breaks.", services.State.MovementDemo, function(value)
         services.State.MovementDemo = value
+        updateUiClickGuard()
 
         if value then
             local count = DemoWorld.SpawnObjectsAtTreePositions(10)
@@ -163,6 +172,7 @@ function Foraging.Mount(parent, services)
 
     Components.Toggle(parent, "TP To Demo Tree", "Teleports to the nearest live tree marker and keeps swinging until it breaks.", services.State.AutoCollectDemo, function(value)
         services.State.AutoCollectDemo = value
+        updateUiClickGuard()
         DemoWorld.SetAutoCollectDemo(value, function(name, hitsRemaining)
             if hitsRemaining and hitsRemaining > 0 then
                 services.Toasts:Push(name .. " hit, " .. hitsRemaining .. " left", "success")
@@ -179,6 +189,7 @@ function Foraging.Mount(parent, services)
         services.State.MovementDemo = false
         services.State.OverlayDemo = false
         services.State.AutoCollectDemo = false
+        updateUiClickGuard()
         services.Toasts:Push("Tree demo overlay cleared", "success")
     end)
 end
