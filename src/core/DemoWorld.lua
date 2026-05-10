@@ -55,10 +55,11 @@ local MAX_JUMP_HEIGHT = 5.8
 local MAX_DROP_HEIGHT = 7.5
 local TREE_STAND_MIN_DISTANCE = 5
 local TREE_STAND_MAX_DISTANCE = 11
-local WAYPOINT_REACHED_DISTANCE = 3.0
-local MIN_MOVETO_INTERVAL = 0.18
-local STUCK_REPATH_SECONDS = 1.1
-local STUCK_JUMP_SECONDS = 0.35
+local WAYPOINT_REACHED_DISTANCE = 4.6
+local PATH_LOOKAHEAD_DISTANCE = 15
+local MIN_MOVETO_INTERVAL = 0.35
+local STUCK_REPATH_SECONDS = 1.15
+local STUCK_JUMP_SECONDS = 0.22
 
 local function isProbablySaplingOrStump(instance)
     if not instance then
@@ -991,18 +992,66 @@ local function shouldJumpForObstacle(root, direction)
     end
     flat = flat.Unit
 
-    -- Low ray hits the block in front, high ray being clear means it is probably
-    -- a one-block step/ledge that a player would jump onto.
-    local lowOrigin = root.Position + Vector3.new(0, -1.7, 0)
-    local highOrigin = root.Position + Vector3.new(0, 1.2, 0)
-    local lowHit = Workspace:Raycast(lowOrigin, flat * 3.2, params)
-    local highHit = Workspace:Raycast(highOrigin, flat * 3.2, params)
+    -- Block terrain uses 3-stud cubes. Cast several body-height rays forward.
+    -- If the lower/body rays hit but head-space is clear, this is a ledge the
+    -- player should jump over instead of pressing into.
+    local distances = { 2.4, 3.2, 4.1 }
+    local lowerOffsets = { -2.1, -0.8, 0.45 }
+    for _, dist in ipairs(distances) do
+        for _, y in ipairs(lowerOffsets) do
+            local hit = Workspace:Raycast(root.Position + Vector3.new(0, y, 0), flat * dist, params)
+            if hit and hit.Instance and hit.Instance.CanCollide then
+                local headClear = not Workspace:Raycast(root.Position + Vector3.new(0, 2.4, 0), flat * dist, params)
+                if headClear then
+                    return true
+                end
+            end
+        end
+    end
 
-    if lowHit and lowHit.Instance and lowHit.Instance.CanCollide and not highHit then
-        return true
+    -- If the next ground in front is higher by about one block, jump early.
+    local currentGround = findGroundAtXZ(root.Position.X, root.Position.Z, root.Position.Y + 5)
+    local ahead = root.Position + flat * 3.4
+    local aheadGround = findGroundAtXZ(ahead.X, ahead.Z, root.Position.Y + 8)
+    if currentGround and aheadGround then
+        local rise = aheadGround.Y - currentGround.Y
+        if rise > 1.1 and rise <= MAX_JUMP_HEIGHT then
+            return true
+        end
     end
 
     return false
+end
+
+local function chooseLookaheadWaypoint(path, startIndex, rootPosition)
+    local index = startIndex
+    local chosen = nil
+    local chosenAction = nil
+    local traveled = 0
+    local lastPos = rootPosition
+
+    while index <= #path do
+        local point, action = normalizePathPoint(path[index])
+        if not point then
+            break
+        end
+
+        local flatDistance = (Vector3.new(rootPosition.X, 0, rootPosition.Z) - Vector3.new(point.X, 0, point.Z)).Magnitude
+        if flatDistance > 1.5 then
+            chosen = point
+            chosenAction = action
+            traveled += (Vector3.new(point.X, 0, point.Z) - Vector3.new(lastPos.X, 0, lastPos.Z)).Magnitude
+            lastPos = point
+        end
+
+        if action == Enum.PathWaypointAction.Jump or traveled >= PATH_LOOKAHEAD_DISTANCE then
+            break
+        end
+
+        index += 1
+    end
+
+    return chosen, chosenAction
 end
 
 local function followMovementPath(path, targetPosition)
@@ -1014,10 +1063,11 @@ local function followMovementPath(path, targetPosition)
 
     pcall(function()
         humanoid.AutoJumpEnabled = true
+        if humanoid.WalkSpeed > 0 and humanoid.WalkSpeed < 14 then
+            humanoid.WalkSpeed = 16
+        end
     end)
 
-    -- Keep normal Roblox-style walking. Do not use Humanoid:Move here because it
-    -- can fight MoveTo and make the character crawl/tap-step on block terrain.
     local index = math.clamp(DemoWorld.CurrentPathIndex or 1, 1, #path)
 
     while index <= #path do
@@ -1028,8 +1078,7 @@ local function followMovementPath(path, targetPosition)
 
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(point.X, 0, point.Z)).Magnitude
         local verticalDistance = point.Y - root.Position.Y
-
-        if flatDistance > WAYPOINT_REACHED_DISTANCE or math.abs(verticalDistance) > 5.5 then
+        if flatDistance > WAYPOINT_REACHED_DISTANCE or math.abs(verticalDistance) > 6.5 then
             break
         end
 
@@ -1041,7 +1090,10 @@ local function followMovementPath(path, targetPosition)
         return true, false
     end
 
-    local waypoint, action = normalizePathPoint(path[index])
+    local waypoint, action = chooseLookaheadWaypoint(path, index, root.Position)
+    if not waypoint then
+        waypoint, action = normalizePathPoint(path[index])
+    end
     if not waypoint then
         return true, false
     end
@@ -1051,20 +1103,26 @@ local function followMovementPath(path, targetPosition)
     local moveDirection = waypointDistance > 0.05 and flatOffset.Unit or Vector3.zero
     local now = os.clock()
 
-    -- Progress tracking. If distance is not improving but the target is still in
-    -- front of us, jump quickly, then repath if we stay stuck.
-    if waypointDistance + 0.15 < (DemoWorld.LastWaypointDistance or math.huge) then
-        DemoWorld.LastWaypointDistance = waypointDistance
+    local rootFlat = Vector3.new(root.Position.X, 0, root.Position.Z)
+    local targetFlat = Vector3.new(targetPosition.X, 0, targetPosition.Z)
+    local targetDistance = (rootFlat - targetFlat).Magnitude
+    local progressDistance = math.min(waypointDistance, targetDistance)
+
+    if progressDistance + 0.18 < (DemoWorld.LastWaypointDistance or math.huge) then
+        DemoWorld.LastWaypointDistance = progressDistance
         DemoWorld.LastProgressAt = now
         DemoWorld.LastJumpNudgeAt = nil
     else
         local stuckFor = now - (DemoWorld.LastProgressAt or now)
-        if stuckFor > STUCK_JUMP_SECONDS and moveDirection.Magnitude > 0.05 and (now - (DemoWorld.LastJumpNudgeAt or 0)) > 0.45 then
+        if stuckFor > STUCK_JUMP_SECONDS and moveDirection.Magnitude > 0.05 and (now - (DemoWorld.LastJumpNudgeAt or 0)) > 0.22 then
             DemoWorld.LastJumpNudgeAt = now
             humanoid.Jump = true
+            pcall(function()
+                humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            end)
         end
 
-        if stuckFor > STUCK_REPATH_SECONDS and (now - (DemoWorld.LastStuckRepathAt or 0)) > 1.6 then
+        if stuckFor > STUCK_REPATH_SECONDS and (now - (DemoWorld.LastStuckRepathAt or 0)) > 1.25 then
             DemoWorld.LastStuckRepathAt = now
             DemoWorld.LastWaypointDistance = math.huge
             DemoWorld.LastProgressAt = now
@@ -1075,15 +1133,19 @@ local function followMovementPath(path, targetPosition)
     end
 
     if action == Enum.PathWaypointAction.Jump
-        or waypoint.Y - root.Position.Y > 0.45
+        or waypoint.Y - root.Position.Y > 0.35
         or shouldJumpForObstacle(root, moveDirection) then
         humanoid.Jump = true
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end)
     end
 
-    -- Smooth movement: keep one MoveTo target active and refresh it often enough
-    -- that Roblox walks continuously instead of stepping block-by-block.
+    -- Smooth movement: send a farther lookahead destination instead of tiny
+    -- block-sized waypoints. This makes Roblox keep normal continuous walking.
     if now - (DemoWorld.MoveToIssuedAt or 0) >= MIN_MOVETO_INTERVAL
-        or (DemoWorld.LastMoveToPoint and (DemoWorld.LastMoveToPoint - waypoint).Magnitude > 1.5) then
+        or not DemoWorld.LastMoveToPoint
+        or (DemoWorld.LastMoveToPoint - waypoint).Magnitude > 4 then
         DemoWorld.MoveToIssuedAt = now
         DemoWorld.LastMoveToPoint = waypoint
         humanoid:MoveTo(waypoint)
