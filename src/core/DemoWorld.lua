@@ -2,6 +2,8 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local PathfindingService = game:GetService("PathfindingService")
+
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
@@ -20,9 +22,12 @@ local DemoWorld = {
     MovementConnection = nil,
     OverlayItems = {},
     AutoCollectRunning = false,
-    HitsRequired = 3,
-    ClickInterval = 0.35,
+    ClickInterval = 0.32,
     LastTreeClick = 0,
+    CurrentMoveTree = nil,
+    CurrentTPTree = nil,
+    LastPathWarn = 0,
+    ToastSink = nil,
 }
 
 local function getCharacter()
@@ -47,8 +52,25 @@ local function getFolder()
         folder.Name = DemoWorld.FolderName
         folder.Parent = Workspace
     end
-
     return folder
+end
+
+local function flatDistance(a, b)
+    local dx = a.X - b.X
+    local dz = a.Z - b.Z
+    return math.sqrt(dx * dx + dz * dz)
+end
+
+local function toast(message, kind)
+    if DemoWorld.ToastSink then
+        DemoWorld.ToastSink(message, kind or "warn")
+    else
+        warn("Iceylands: " .. message)
+    end
+end
+
+function DemoWorld.SetToastSink(callback)
+    DemoWorld.ToastSink = callback
 end
 
 local function makePart(name, position, color)
@@ -56,80 +78,52 @@ local function makePart(name, position, color)
     part.Name = name
     part.Anchored = true
     part.CanCollide = false
-    part.Size = Vector3.new(2.5, 2.5, 2.5)
+    part.CanTouch = false
+    part.Size = Vector3.new(1.25, 1.25, 1.25)
     part.Position = position
-    part.Material = Enum.Material.Ice
+    part.Material = Enum.Material.Neon
     part.Color = color
+    part.Transparency = 0.35
     part.Parent = getFolder()
     return part
 end
 
-local function makeTreePoint(name, position)
-    local part = makePart(name, position, Color3.fromRGB(106, 202, 255))
-    part.Size = Vector3.new(1.25, 1.25, 1.25)
+local function makeTreePoint(tree, index)
+    local part = makePart("TreeTarget" .. index, tree.Position, Color3.fromRGB(106, 202, 255))
     part.Shape = Enum.PartType.Ball
-    part.Material = Enum.Material.Neon
-    part.Transparency = 0.12
+    part:SetAttribute("IceylandsDemoObject", true)
+    part:SetAttribute("SourceTreeName", tree.Name or tree.RawName or "Tree")
+    part:SetAttribute("TreeDistance", tree.Distance or 0)
     return part
 end
 
 function DemoWorld.EnsureObjects()
-    local folder = getFolder()
-    local root = getRoot()
-    local origin = root and root.Position or Vector3.new(0, 8, 0)
+    return getFolder()
+end
 
-    local count = 0
-    for _, item in ipairs(folder:GetChildren()) do
-        if item:GetAttribute("IceylandsDemoObject") then
-            count += 1
-        end
+function DemoWorld.ClearObjects()
+    local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
+    if folder then
+        folder:Destroy()
     end
-
-    if count > 0 then
-        return folder
-    end
-
-    local offsets = {
-        Vector3.new(18, 1, 0),
-        Vector3.new(-16, 1, 12),
-        Vector3.new(8, 1, -20),
-        Vector3.new(26, 1, 18),
-        Vector3.new(-24, 1, -14),
-    }
-
-    for index, offset in ipairs(offsets) do
-        local part = makePart("DemoCollectible" .. index, origin + offset, Color3.fromRGB(106, 202, 255))
-        part:SetAttribute("IceylandsDemoObject", true)
-        part:SetAttribute("Collected", false)
-        part:SetAttribute("HitsRemaining", DemoWorld.HitsRequired)
-    end
-
-    return folder
+    DemoWorld.CurrentMoveTree = nil
+    DemoWorld.CurrentTPTree = nil
 end
 
 function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
     DemoWorld.ClearObjects()
 
     local folder = getFolder()
-    local clusters = TreeScanner.GetClusters(maxObjects or 10)
+    local trees = TreeScanner.GetClusters(maxObjects or 25)
 
     local created = 0
-    for index, cluster in ipairs(clusters) do
-        if created >= (maxObjects or 10) then
+    for index, tree in ipairs(trees) do
+        if created >= (maxObjects or 25) then
             break
         end
-
-        local part = makeTreePoint("DemoTreePoint" .. index, cluster.Position)
-        part:SetAttribute("IceylandsDemoObject", true)
-        part:SetAttribute("Collected", false)
-        part:SetAttribute("HitsRemaining", DemoWorld.HitsRequired)
-        part:SetAttribute("SourceTreeName", cluster.RawName)
+        local part = makeTreePoint(tree, index)
         part.Parent = folder
         created += 1
-    end
-
-    if created == 0 then
-        DemoWorld.EnsureObjects()
     end
 
     return created
@@ -178,7 +172,7 @@ end
 function DemoWorld.EquipBestAxe()
     local tool = DemoWorld.GetBestAxe()
     if not tool then
-        warn("Iceylands: no test axe found in inventory/backpack.")
+        toast("No axe found in inventory/backpack.", "warn")
         return false
     end
 
@@ -196,7 +190,93 @@ function DemoWorld.EquipBestAxe()
     return false
 end
 
-function DemoWorld.ActivateHeldAxe(target)
+local function getTrunk(tree)
+    local inst = tree and tree.Instance
+    if not inst or not inst.Parent then
+        return nil
+    end
+
+    local trunk = tree.Trunk
+    if trunk and trunk.Parent then
+        return trunk
+    end
+
+    for _, child in ipairs(inst:GetDescendants()) do
+        if child:IsA("BasePart") and string.lower(child.Name) == "trunk" then
+            tree.Trunk = child
+            return child
+        end
+    end
+
+    return nil
+end
+
+local function isTreeLive(tree)
+    return tree and tree.Instance and TreeScanner.IsLiveTree(tree)
+end
+
+local function getStandPosition(tree)
+    local root = getRoot()
+    local trunk = getTrunk(tree)
+    if not root or not trunk then
+        return nil
+    end
+
+    local base = Vector3.new(trunk.Position.X, trunk.Position.Y - trunk.Size.Y / 2 + 2.5, trunk.Position.Z)
+    local away = root.Position - base
+    away = Vector3.new(away.X, 0, away.Z)
+    if away.Magnitude < 1 then
+        away = Vector3.new(1, 0, 0)
+    end
+
+    return base + away.Unit * math.max(4.5, math.min(7, (trunk.Size.X + trunk.Size.Z) * 0.25))
+end
+
+local function getNearestTree(exclude)
+    local trees = TreeScanner.GetClusters(30)
+    for _, tree in ipairs(trees) do
+        if tree ~= exclude and isTreeLive(tree) then
+            return tree
+        end
+    end
+    return nil
+end
+
+function DemoWorld.GetCollectibles()
+    return TreeScanner.GetClusters(30)
+end
+
+function DemoWorld.GetNearestCollectible()
+    local tree = getNearestTree()
+    return tree, tree and tree.Distance or nil
+end
+
+local function pressLeftClick()
+    if mouse1click then
+        pcall(mouse1click)
+        return
+    end
+
+    if mouse1press and mouse1release then
+        pcall(mouse1press)
+        task.wait(0.03)
+        pcall(mouse1release)
+        return
+    end
+
+    local camera = Workspace.CurrentCamera
+    local viewportSize = camera and camera.ViewportSize or Vector2.new(800, 600)
+    local x = viewportSize.X / 2
+    local y = viewportSize.Y / 2
+
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.02)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+end
+
+function DemoWorld.ActivateHeldAxe(tree)
     local player = Players.LocalPlayer
     local character = player and player.Character
     local tool = DemoWorld.GetBestAxe()
@@ -215,102 +295,178 @@ function DemoWorld.ActivateHeldAxe(target)
         return false
     end
 
-    tool:SetAttribute("LastDemoTarget", target and target.Name or "")
-    tool:SetAttribute("DemoSwingCount", (tool:GetAttribute("DemoSwingCount") or 0) + 1)
-
     pcall(function()
         tool:Activate()
     end)
 
+    pressLeftClick()
     return true
 end
 
-
-local function pressLeftClick()
-    local camera = Workspace.CurrentCamera
-    local viewportSize = camera and camera.ViewportSize or Vector2.new(800, 600)
-    local x = viewportSize.X / 2
-    local y = viewportSize.Y / 2
-
-    pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait()
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    end)
+local function faceTree(tree)
+    local root = getRoot()
+    local trunk = getTrunk(tree)
+    if root and trunk then
+        root.CFrame = CFrame.new(root.Position, Vector3.new(trunk.Position.X, root.Position.Y, trunk.Position.Z))
+    end
 end
 
-local function damageDemoTree(target, onCollect)
-    if not target or target:GetAttribute("Collected") then
+local function chopTree(tree)
+    if not isTreeLive(tree) then
         return false
     end
 
     DemoWorld.EquipBestAxe()
-    pressLeftClick()
-    DemoWorld.ActivateHeldAxe(target)
-
-    local hitsRemaining = target:GetAttribute("HitsRemaining")
-    if type(hitsRemaining) ~= "number" then
-        hitsRemaining = DemoWorld.HitsRequired
-    end
-
-    hitsRemaining -= 1
-    target:SetAttribute("HitsRemaining", hitsRemaining)
-
-    if onCollect then
-        onCollect(target.Name, hitsRemaining)
-    end
-
-    if hitsRemaining <= 0 then
-        target:SetAttribute("Collected", true)
-        target.Transparency = 1
-        target.CanTouch = false
-        target.CanQuery = false
-        target.CanCollide = false
-    else
-        target.Transparency = math.clamp(0.12 + ((DemoWorld.HitsRequired - hitsRemaining) * 0.16), 0.12, 0.85)
-    end
-
+    faceTree(tree)
+    DemoWorld.ActivateHeldAxe(tree)
     return true
 end
 
-function DemoWorld.ClearObjects()
-    local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
-    if folder then
-        folder:Destroy()
-    end
-end
-
-function DemoWorld.GetCollectibles()
-    local folder = DemoWorld.EnsureObjects()
-    local items = {}
-
-    for _, item in ipairs(folder:GetChildren()) do
-        if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
-            table.insert(items, item)
-        end
-    end
-
-    return items
-end
-
-function DemoWorld.GetNearestCollectible()
+local function computePath(toPosition)
     local root = getRoot()
-    if not root then
+    if not root or not toPosition then
         return nil
     end
 
-    local nearest
-    local nearestDistance = math.huge
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentCanClimb = true,
+        WaypointSpacing = 6,
+    })
 
-    for _, item in ipairs(DemoWorld.GetCollectibles()) do
-        local distance = (root.Position - item.Position).Magnitude
-        if distance < nearestDistance then
-            nearest = item
-            nearestDistance = distance
+    local ok = pcall(function()
+        path:ComputeAsync(root.Position, toPosition)
+    end)
+
+    if ok and path.Status == Enum.PathStatus.Success then
+        return path:GetWaypoints()
+    end
+
+    return nil
+end
+
+local function shouldJumpForStep(root)
+    local humanoid = getHumanoid()
+    if not humanoid then
+        return false
+    end
+
+    local state = humanoid:GetState()
+    if state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Jumping then
+        return false
+    end
+
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = { getCharacter() }
+    params.FilterType = Enum.RaycastFilterType.Exclude
+
+    local forward = root.CFrame.LookVector
+    local lowOrigin = root.Position + Vector3.new(0, -1.4, 0)
+    local lowHit = Workspace:Raycast(lowOrigin, forward * 3, params)
+    if not lowHit then
+        return false
+    end
+
+    local highOrigin = root.Position + Vector3.new(0, 2.4, 0)
+    local highHit = Workspace:Raycast(highOrigin, forward * 3, params)
+    return highHit == nil
+end
+
+local function movementTick(state)
+    local root = getRoot()
+    local humanoid = getHumanoid()
+    if not root or not humanoid then
+        return
+    end
+
+    if not state.Tree or not isTreeLive(state.Tree) then
+        state.Tree = getNearestTree()
+        state.Waypoints = nil
+        state.Index = 1
+        state.LastPathTime = 0
+        state.LastPos = root.Position
+        state.StuckSince = os.clock()
+    end
+
+    local tree = state.Tree
+    if not tree then
+        return
+    end
+
+    local trunk = getTrunk(tree)
+    local stand = getStandPosition(tree)
+    if not trunk or not stand then
+        state.Tree = nil
+        return
+    end
+
+    local flatToTrunk = flatDistance(root.Position, trunk.Position)
+    local yDiff = math.abs(root.Position.Y - (trunk.Position.Y - trunk.Size.Y / 2 + 2.5))
+
+    if flatToTrunk <= 8 and yDiff <= 8 then
+        humanoid:Move(Vector3.zero, false)
+        faceTree(tree)
+        if os.clock() - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
+            DemoWorld.LastTreeClick = os.clock()
+            chopTree(tree)
+        end
+        return
+    end
+
+    if not state.Waypoints or not state.Waypoints[state.Index] or os.clock() - (state.LastPathTime or 0) > 4 then
+        state.Waypoints = computePath(stand)
+        state.Index = 2
+        state.LastPathTime = os.clock()
+
+        if not state.Waypoints then
+            if os.clock() - DemoWorld.LastPathWarn > 4 then
+                DemoWorld.LastPathWarn = os.clock()
+                toast("Can't pathfind to nearest tree, trying another.", "warn")
+            end
+            state.Tree = nil
+            return
         end
     end
 
-    return nearest, nearestDistance
+    local waypoint = state.Waypoints[state.Index]
+    if not waypoint then
+        state.Waypoints = nil
+        return
+    end
+
+    local target = waypoint.Position
+    local flatToWaypoint = flatDistance(root.Position, target)
+    if flatToWaypoint < 3.5 then
+        state.Index += 1
+        return
+    end
+
+    humanoid:MoveTo(target)
+
+    if waypoint.Action == Enum.PathWaypointAction.Jump then
+        humanoid.Jump = true
+    elseif shouldJumpForStep(root) and os.clock() - (state.LastJump or 0) > 0.7 then
+        state.LastJump = os.clock()
+        humanoid.Jump = true
+    end
+
+    if os.clock() - (state.LastStuckCheck or 0) > 0.5 then
+        local moved = (root.Position - (state.LastPos or root.Position)).Magnitude
+        if moved < 0.8 then
+            if os.clock() - (state.StuckSince or os.clock()) > 1.1 then
+                humanoid.Jump = true
+                state.Waypoints = nil
+                state.LastPathTime = 0
+                state.StuckSince = os.clock()
+            end
+        else
+            state.StuckSince = os.clock()
+        end
+        state.LastPos = root.Position
+        state.LastStuckCheck = os.clock()
+    end
 end
 
 function DemoWorld.SetMovementDemo(enabled)
@@ -320,33 +476,22 @@ function DemoWorld.SetMovementDemo(enabled)
     end
 
     if not enabled then
+        DemoWorld.CurrentMoveTree = nil
         return
     end
 
-    DemoWorld.EnsureObjects()
     DemoWorld.EquipBestAxe()
+    local state = {
+        Tree = nil,
+        Waypoints = nil,
+        Index = 1,
+        LastPathTime = 0,
+        LastPos = getRoot() and getRoot().Position or Vector3.zero,
+        StuckSince = os.clock(),
+    }
 
-    DemoWorld.MovementConnection = RunService.RenderStepped:Connect(function(deltaTime)
-        local root = getRoot()
-        local target = DemoWorld.GetNearestCollectible()
-        if not root or not target then
-            return
-        end
-
-        local offset = target.Position - root.Position
-        if offset.Magnitude <= 4 then
-            root.CFrame = CFrame.new(root.Position, target.Position)
-
-            if os.clock() - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
-                DemoWorld.LastTreeClick = os.clock()
-                damageDemoTree(target)
-            end
-
-            return
-        end
-
-        local step = math.min(offset.Magnitude, 18 * deltaTime)
-        root.CFrame = CFrame.new(root.Position + offset.Unit * step, target.Position)
+    DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function()
+        movementTick(state)
     end)
 end
 
@@ -362,14 +507,18 @@ function DemoWorld.SetOverlayDemo(rootGui, enabled)
         return
     end
 
-    for _, part in ipairs(DemoWorld.GetCollectibles()) do
+    local parent = rootGui or Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    for index, tree in ipairs(TreeScanner.GetClusters(25)) do
+        local marker = makeTreePoint(tree, index)
+        marker.Transparency = 1
+
         local billboard = Instance.new("BillboardGui")
-        billboard.Name = "IceylandsDemoMarker"
-        billboard.Adornee = part
+        billboard.Name = "IceylandsTreeMarker"
+        billboard.Adornee = marker
         billboard.AlwaysOnTop = true
-        billboard.Size = UDim2.fromOffset(140, 36)
+        billboard.Size = UDim2.fromOffset(160, 34)
         billboard.StudsOffset = Vector3.new(0, 3, 0)
-        billboard.Parent = rootGui
+        billboard.Parent = parent
 
         local label = Instance.new("TextLabel")
         label.BackgroundColor3 = Color3.fromRGB(20, 38, 60)
@@ -378,46 +527,77 @@ function DemoWorld.SetOverlayDemo(rootGui, enabled)
         label.Font = Enum.Font.GothamBold
         label.TextSize = 12
         label.TextColor3 = Color3.fromRGB(242, 248, 255)
-        local hits = part:GetAttribute("HitsRemaining")
-        label.Text = hits and (part.Name .. " | " .. hits .. " hits") or part.Name
+        label.Text = string.format("%s • %.0f studs", tree.Name or "Tree", tree.Distance or 0)
         label.Parent = billboard
         Instance.new("UICorner", label).CornerRadius = UDim.new(0, 6)
 
         table.insert(DemoWorld.OverlayItems, billboard)
+        table.insert(DemoWorld.OverlayItems, marker)
     end
+end
+
+local function teleportBesideTree(tree)
+    local root = getRoot()
+    local trunk = getTrunk(tree)
+    if not root or not trunk then
+        return false
+    end
+
+    local stand = getStandPosition(tree)
+    if not stand then
+        return false
+    end
+
+    root.CFrame = CFrame.new(stand + Vector3.new(0, 2.5, 0), Vector3.new(trunk.Position.X, stand.Y + 2.5, trunk.Position.Z))
+    return true
 end
 
 function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
     DemoWorld.AutoCollectRunning = enabled
     if not enabled then
+        DemoWorld.CurrentTPTree = nil
         return
     end
 
-    DemoWorld.EnsureObjects()
     DemoWorld.EquipBestAxe()
 
     task.spawn(function()
         while DemoWorld.AutoCollectRunning do
             local root = getRoot()
-            local target = DemoWorld.GetNearestCollectible()
-
-            if not root or not target then
-                task.wait(0.25)
+            if not root then
+                task.wait(0.2)
                 continue
             end
 
-            local distance = (root.Position - target.Position).Magnitude
-            if distance > 4 then
-                root.CFrame = CFrame.new(target.Position + Vector3.new(0, 3, 0))
+            if not DemoWorld.CurrentTPTree or not isTreeLive(DemoWorld.CurrentTPTree) then
+                DemoWorld.CurrentTPTree = getNearestTree()
+                if DemoWorld.CurrentTPTree and onCollect then
+                    onCollect((DemoWorld.CurrentTPTree.Name or "Tree") .. " target", nil)
+                end
+            end
+
+            local tree = DemoWorld.CurrentTPTree
+            if not tree then
+                task.wait(0.5)
+                continue
+            end
+
+            local trunk = getTrunk(tree)
+            if not trunk then
+                DemoWorld.CurrentTPTree = nil
+                continue
+            end
+
+            local distance = flatDistance(root.Position, trunk.Position)
+            if distance > 8 then
+                teleportBesideTree(tree)
                 task.wait(0.25)
             else
-                damageDemoTree(target, onCollect)
-
-                if target:GetAttribute("Collected") then
-                    task.wait(0.25)
-                else
-                    task.wait(DemoWorld.ClickInterval)
+                if os.clock() - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
+                    DemoWorld.LastTreeClick = os.clock()
+                    chopTree(tree)
                 end
+                task.wait(0.08)
             end
         end
     end)

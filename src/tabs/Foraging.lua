@@ -139,17 +139,6 @@ function Foraging.Mount(parent, services)
         services.Toasts:Push(ok and "Foraging audit copied" or json, ok and "success" or "warn")
     end)
 
-    Components.Button(parent, "Spawn Tree Positions", "Creates local demo tree points using the audit locations.", "Spawn", function()
-        local count = DemoWorld.SpawnObjectsAtTreePositions(10)
-        if services.State.OverlayDemo then
-            DemoWorld.SetOverlayDemo(services.Root, true)
-        end
-
-        audit = collectAudit()
-        summaryLabel.Text = buildSummary(audit)
-        services.Toasts:Push(count > 0 and ("Spawned " .. count .. " tree demo points") or "No tree positions found", count > 0 and "success" or "warn")
-    end)
-
     Components.Toggle(parent, "Tree Movement", "Walks to the nearest live tree and keeps swinging until it breaks.", services.State.MovementDemo, function(value)
         services.State.MovementDemo = value
         services.State.OverlayDemo = value
@@ -170,17 +159,15 @@ function Foraging.Mount(parent, services)
     end)
 
 
-    Components.Toggle(parent, "TP To Demo Tree", "Teleports to the nearest live tree marker and keeps swinging until it breaks.", services.State.AutoCollectDemo, function(value)
+    Components.Toggle(parent, "TP To Demo Tree", "Teleports beside the nearest live tree, swings until it breaks, then moves to the next nearest tree on this island.", services.State.AutoCollectDemo, function(value)
         services.State.AutoCollectDemo = value
         updateUiClickGuard()
-        DemoWorld.SetAutoCollectDemo(value, function(name, hitsRemaining)
-            if hitsRemaining and hitsRemaining > 0 then
-                services.Toasts:Push(name .. " hit, " .. hitsRemaining .. " left", "success")
-            else
-                services.Toasts:Push(name .. " cleared", "success")
+        DemoWorld.SetAutoCollectDemo(value, function(message)
+            if message then
+                services.Toasts:Push(message, "success")
             end
         end)
-        services.Toasts:Push(value and "Tree demo TP enabled" or "Tree demo TP disabled", "success")
+        services.Toasts:Push(value and "Tree TP enabled" or "Tree TP disabled", "success")
     end)
 
 end
