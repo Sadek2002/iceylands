@@ -43,6 +43,20 @@ local function makePart(name, position, color)
     return part
 end
 
+local function isTreeCandidate(item)
+    local name = string.lower(item.Name)
+
+    if string.match(name, "^tree%d*$") or string.match(name, "^tree%a+$") then
+        return true
+    end
+
+    if item.Parent and item.Parent.Name == "Blocks" and string.find(name, "tree", 1, true) then
+        return true
+    end
+
+    return string.find(name, " tree", 1, true) ~= nil or string.find(name, "tree", 1, true) == 1
+end
+
 function DemoWorld.EnsureObjects()
     local folder = getFolder()
     local root = getRoot()
@@ -74,6 +88,49 @@ function DemoWorld.EnsureObjects()
     end
 
     return folder
+end
+
+function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
+    DemoWorld.ClearObjects()
+
+    local folder = getFolder()
+    local root = getRoot()
+    local candidates = {}
+
+    for _, item in ipairs(Workspace:GetDescendants()) do
+        if item:IsA("BasePart") and isTreeCandidate(item) then
+            local distance = root and (root.Position - item.Position).Magnitude or 0
+            table.insert(candidates, {
+                Name = item.Name,
+                Position = item.Position,
+                Distance = distance,
+            })
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        return a.Distance < b.Distance
+    end)
+
+    local created = 0
+    for index, candidate in ipairs(candidates) do
+        if created >= (maxObjects or 10) then
+            break
+        end
+
+        local part = makePart("DemoTreePoint" .. index, candidate.Position + Vector3.new(0, 3, 0), Color3.fromRGB(106, 202, 255))
+        part:SetAttribute("IceylandsDemoObject", true)
+        part:SetAttribute("Collected", false)
+        part:SetAttribute("SourceTreeName", candidate.Name)
+        part.Parent = folder
+        created += 1
+    end
+
+    if created == 0 then
+        DemoWorld.EnsureObjects()
+    end
+
+    return created
 end
 
 function DemoWorld.ClearObjects()

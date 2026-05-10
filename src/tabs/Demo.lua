@@ -15,6 +15,14 @@ function Demo.Mount(parent, services)
         services.Toasts:Push("Demo objects ready", "success")
     end)
 
+    Components.Button(parent, "Spawn At Tree Positions", "Places demo collectibles at detected tree-like part positions.", "Spawn", function()
+        local count = DemoWorld.SpawnObjectsAtTreePositions(10)
+        if services.State.OverlayDemo then
+            DemoWorld.SetOverlayDemo(services.Root, true)
+        end
+        services.Toasts:Push(count > 0 and ("Spawned " .. count .. " demo tree points") or "No tree positions found", count > 0 and "success" or "warn")
+    end)
+
     Components.Toggle(parent, "Movement Demo", "Moves toward demo collectibles only. Intended for private Studio testing.", services.State.MovementDemo, function(value)
         services.State.MovementDemo = value
         DemoWorld.SetMovementDemo(value)
