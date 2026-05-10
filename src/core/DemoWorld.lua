@@ -40,6 +40,21 @@ local function getHumanoid()
     return character and character:FindFirstChildOfClass("Humanoid")
 end
 
+local function removeDemoAxe()
+    local player = Players.LocalPlayer
+    local character = player and player.Character
+    local backpack = player and player:FindFirstChild("Backpack")
+
+    for _, container in ipairs({ character, backpack }) do
+        if container then
+            local demoAxe = container:FindFirstChild("Iceylands Demo Axe")
+            if demoAxe then
+                demoAxe:Destroy()
+            end
+        end
+    end
+end
+
 local function getFolder()
     local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     if not folder then
@@ -176,6 +191,8 @@ function DemoWorld.GetBestAxe()
 end
 
 function DemoWorld.EquipBestAxe()
+    removeDemoAxe()
+
     local tool = DemoWorld.GetBestAxe()
     if not tool then
         warn("Iceylands: no test axe found in inventory/backpack.")
@@ -190,7 +207,7 @@ function DemoWorld.EquipBestAxe()
     local humanoid = getHumanoid()
     if humanoid then
         humanoid:EquipTool(tool)
-        return true
+        return tool.Parent == character
     end
 
     return false
@@ -199,18 +216,14 @@ end
 function DemoWorld.ActivateHeldAxe(target)
     local player = Players.LocalPlayer
     local character = player and player.Character
-    local tool = DemoWorld.GetBestAxe()
 
-    if not tool then
+    removeDemoAxe()
+    if not DemoWorld.EquipBestAxe() then
         return false
     end
 
-    if character and tool.Parent ~= character then
-        DemoWorld.EquipBestAxe()
-        character = player and player.Character
-        tool = DemoWorld.GetBestAxe()
-    end
-
+    character = player and player.Character
+    local tool = DemoWorld.GetBestAxe()
     if not tool or tool.Parent ~= character then
         return false
     end
@@ -222,21 +235,55 @@ function DemoWorld.ActivateHeldAxe(target)
         tool:Activate()
     end)
 
+    pcall(function()
+        if tool:FindFirstChild("RemoteEvent") then
+            tool.RemoteEvent:FireServer(target)
+        end
+    end)
+
     return true
 end
 
 
-local function pressLeftClick()
+local function pressLeftClick(target)
     local camera = Workspace.CurrentCamera
-    local viewportSize = camera and camera.ViewportSize or Vector2.new(800, 600)
-    local x = viewportSize.X / 2
-    local y = viewportSize.Y / 2
+    local x, y = 400, 300
 
-    pcall(function()
+    if camera then
+        local viewportSize = camera.ViewportSize
+        x = viewportSize.X / 2
+        y = viewportSize.Y / 2
+
+        if target and target:IsA("BasePart") then
+            local screenPoint, onScreen = camera:WorldToViewportPoint(target.Position)
+            if onScreen then
+                x = screenPoint.X
+                y = screenPoint.Y
+            end
+        end
+    end
+
+    local clicked = false
+
+    if type(mouse1click) == "function" then
+        clicked = pcall(mouse1click) or clicked
+    end
+
+    if type(mouse1press) == "function" and type(mouse1release) == "function" then
+        clicked = pcall(function()
+            mouse1press()
+            task.wait(0.05)
+            mouse1release()
+        end) or clicked
+    end
+
+    clicked = pcall(function()
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait()
+        task.wait(0.05)
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    end)
+    end) or clicked
+
+    return clicked
 end
 
 local function damageDemoTree(target, onCollect)
@@ -245,7 +292,7 @@ local function damageDemoTree(target, onCollect)
     end
 
     DemoWorld.EquipBestAxe()
-    pressLeftClick()
+    pressLeftClick(target)
     DemoWorld.ActivateHeldAxe(target)
 
     local hitsRemaining = target:GetAttribute("HitsRemaining")
@@ -323,7 +370,8 @@ function DemoWorld.SetMovementDemo(enabled)
         return
     end
 
-    DemoWorld.EnsureObjects()
+    removeDemoAxe()
+    DemoWorld.SpawnObjectsAtTreePositions(10)
     DemoWorld.EquipBestAxe()
 
     DemoWorld.MovementConnection = RunService.RenderStepped:Connect(function(deltaTime)
@@ -336,6 +384,9 @@ function DemoWorld.SetMovementDemo(enabled)
         local offset = target.Position - root.Position
         if offset.Magnitude <= 4 then
             root.CFrame = CFrame.new(root.Position, target.Position)
+            if Workspace.CurrentCamera then
+                Workspace.CurrentCamera.CFrame = CFrame.new(Workspace.CurrentCamera.CFrame.Position, target.Position)
+            end
 
             if os.clock() - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
                 DemoWorld.LastTreeClick = os.clock()
@@ -393,7 +444,8 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
         return
     end
 
-    DemoWorld.EnsureObjects()
+    removeDemoAxe()
+    DemoWorld.SpawnObjectsAtTreePositions(10)
     DemoWorld.EquipBestAxe()
 
     task.spawn(function()
