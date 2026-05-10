@@ -118,7 +118,7 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
             break
         end
 
-        local part = makePart("DemoTreePoint" .. index, candidate.Position + Vector3.new(0, 3, 0), Color3.fromRGB(106, 202, 255))
+        local part = makePart("DemoTreePoint" .. index, candidate.Position, Color3.fromRGB(106, 202, 255))
         part:SetAttribute("IceylandsDemoObject", true)
         part:SetAttribute("Collected", false)
         part:SetAttribute("SourceTreeName", candidate.Name)
