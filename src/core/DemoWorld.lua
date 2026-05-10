@@ -5,6 +5,16 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
+local AxePriority = {
+    woodAxe = 1,
+    stoneAxe = 2,
+    ironAxe = 3,
+    gildedSteelAxe = 4,
+    diamondAxe = 5,
+    opalAxe = 6,
+    voidMattock = 7,
+}
+
 local DemoWorld = {
     FolderName = "IceylandsDemo",
     MovementConnection = nil,
@@ -125,48 +135,56 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
     return created
 end
 
-function DemoWorld.EnsureDemoAxe()
+local function findBestAxeIn(container)
+    if not container then
+        return nil, -math.huge
+    end
+
+    local bestTool
+    local bestPriority = -math.huge
+
+    for _, item in ipairs(container:GetChildren()) do
+        if item:IsA("Tool") then
+            local priority = AxePriority[item.Name]
+            if priority and priority > bestPriority then
+                bestTool = item
+                bestPriority = priority
+            end
+        end
+    end
+
+    return bestTool, bestPriority
+end
+
+function DemoWorld.GetBestAxe()
     local player = Players.LocalPlayer
-    local backpack = player and player:FindFirstChild("Backpack")
-    if not player or not backpack then
+    if not player then
+        return nil
+    end
+
+    local character = player.Character
+    local backpack = player:FindFirstChild("Backpack")
+
+    local backpackTool, backpackPriority = findBestAxeIn(backpack)
+    local characterTool, characterPriority = findBestAxeIn(character)
+
+    if characterTool and characterPriority >= backpackPriority then
+        return characterTool
+    end
+
+    return backpackTool
+end
+
+function DemoWorld.EquipBestAxe()
+    local tool = DemoWorld.GetBestAxe()
+    if not tool then
+        warn("Iceylands: no test axe found in inventory/backpack.")
         return false
     end
 
-    local tool = backpack:FindFirstChild("Iceylands Demo Axe")
-    local character = player.Character
-    if not tool and character then
-        tool = character:FindFirstChild("Iceylands Demo Axe")
-    end
-
-    if not tool then
-        tool = Instance.new("Tool")
-        tool.Name = "Iceylands Demo Axe"
-        tool.RequiresHandle = true
-        tool.CanBeDropped = false
-
-        local handle = Instance.new("Part")
-        handle.Name = "Handle"
-        handle.Size = Vector3.new(0.35, 3, 0.35)
-        handle.Color = Color3.fromRGB(145, 91, 45)
-        handle.Material = Enum.Material.Wood
-        handle.Parent = tool
-
-        local head = Instance.new("Part")
-        head.Name = "DemoAxeHead"
-        head.Size = Vector3.new(1.2, 0.55, 0.25)
-        head.Color = Color3.fromRGB(172, 222, 255)
-        head.Material = Enum.Material.Ice
-        head.CanCollide = false
-        head.Massless = true
-        head.Parent = tool
-
-        local weld = Instance.new("WeldConstraint")
-        weld.Part0 = handle
-        weld.Part1 = head
-        weld.Parent = head
-        head.CFrame = handle.CFrame * CFrame.new(0, 1.1, 0)
-
-        tool.Parent = backpack
+    local character = getCharacter()
+    if tool.Parent == character then
+        return true
     end
 
     local humanoid = getHumanoid()
@@ -178,18 +196,22 @@ function DemoWorld.EnsureDemoAxe()
     return false
 end
 
-function DemoWorld.ActivateDemoAxe(target)
+function DemoWorld.ActivateHeldAxe(target)
     local player = Players.LocalPlayer
     local character = player and player.Character
-    local tool = character and character:FindFirstChild("Iceylands Demo Axe")
+    local tool = DemoWorld.GetBestAxe()
 
     if not tool then
-        DemoWorld.EnsureDemoAxe()
-        character = player and player.Character
-        tool = character and character:FindFirstChild("Iceylands Demo Axe")
+        return false
     end
 
-    if not tool then
+    if character and tool.Parent ~= character then
+        DemoWorld.EquipBestAxe()
+        character = player and player.Character
+        tool = DemoWorld.GetBestAxe()
+    end
+
+    if not tool or tool.Parent ~= character then
         return false
     end
 
@@ -222,9 +244,9 @@ local function damageDemoTree(target, onCollect)
         return false
     end
 
-    DemoWorld.EnsureDemoAxe()
+    DemoWorld.EquipBestAxe()
     pressLeftClick()
-    DemoWorld.ActivateDemoAxe(target)
+    DemoWorld.ActivateHeldAxe(target)
 
     local hitsRemaining = target:GetAttribute("HitsRemaining")
     if type(hitsRemaining) ~= "number" then
@@ -302,6 +324,7 @@ function DemoWorld.SetMovementDemo(enabled)
     end
 
     DemoWorld.EnsureObjects()
+    DemoWorld.EquipBestAxe()
 
     DemoWorld.MovementConnection = RunService.RenderStepped:Connect(function(deltaTime)
         local root = getRoot()
@@ -371,6 +394,7 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
     end
 
     DemoWorld.EnsureObjects()
+    DemoWorld.EquipBestAxe()
 
     task.spawn(function()
         while DemoWorld.AutoCollectRunning do
