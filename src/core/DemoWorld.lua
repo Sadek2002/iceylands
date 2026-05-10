@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
@@ -21,6 +22,9 @@ local DemoWorld = {
     LastMoveTo = 0,
     MoveToInterval = 0.75,
     StandDistance = 5,
+    ChopRange = 8,
+    ChopInterval = 0.45,
+    LastChop = 0,
 }
 
 local function getPlayer()
@@ -125,6 +129,62 @@ local function getStandPosition(rootPosition, trunkPosition)
     )
 end
 
+
+local function getTrunkAimPosition(trunk)
+    -- Aim at the middle/lower-middle of the actual trunk part.
+    -- Do not target leaves, collision boxes, wheat, seeds, grass, or the mouse cursor location.
+    return trunk.Position + Vector3.new(0, math.clamp(trunk.Size.Y * 0.15, 1.5, 5), 0)
+end
+
+local function faceTrunk(root, trunk)
+    local aim = getTrunkAimPosition(trunk)
+    local flatAim = Vector3.new(aim.X, root.Position.Y, aim.Z)
+    if (flatAim - root.Position).Magnitude > 0.1 then
+        root.CFrame = CFrame.lookAt(root.Position, flatAim)
+    end
+end
+
+local function clickTrunk(tree)
+    local character = getCharacter()
+    local root = getRoot()
+    local trunk = tree and tree.Trunk
+    if not character or not root or not trunk then
+        return false
+    end
+
+    DemoWorld.EquipBestAxe()
+
+    local tool = character:FindFirstChildOfClass("Tool")
+    if not tool then
+        return false
+    end
+
+    faceTrunk(root, trunk)
+
+    local aimPosition = getTrunkAimPosition(trunk)
+    local camera = Workspace.CurrentCamera
+
+    -- First activate the equipped axe directly. This is safe and does not depend on the user's cursor.
+    pcall(function()
+        tool:Activate()
+    end)
+
+    -- Then send a virtual click to the projected trunk center if it is on-screen.
+    -- This targets the tree location, not the user's current mouse position.
+    if camera then
+        local screenPoint, onScreen = camera:WorldToViewportPoint(aimPosition)
+        if onScreen and screenPoint.Z > 0 then
+            pcall(function()
+                VirtualInputManager:SendMouseButtonEvent(screenPoint.X, screenPoint.Y, 0, true, game, 0)
+                task.wait(0.03)
+                VirtualInputManager:SendMouseButtonEvent(screenPoint.X, screenPoint.Y, 0, false, game, 0)
+            end)
+        end
+    end
+
+    return true
+end
+
 local function setMovementTarget()
     DemoWorld.CurrentTree = TreeScanner.GetNearestTree()
     return DemoWorld.CurrentTree
@@ -167,8 +227,16 @@ function DemoWorld.SetMovementDemo(enabled)
         local standPosition = getStandPosition(root.Position, tree.Trunk.Position)
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(standPosition.X, 0, standPosition.Z)).Magnitude
 
-        if flatDistance <= 3 then
+        local trunkFlatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(tree.Trunk.Position.X, 0, tree.Trunk.Position.Z)).Magnitude
+
+        if flatDistance <= 3 or trunkFlatDistance <= DemoWorld.ChopRange then
             humanoid:Move(Vector3.zero, false)
+
+            if os.clock() - DemoWorld.LastChop >= DemoWorld.ChopInterval then
+                DemoWorld.LastChop = os.clock()
+                clickTrunk(tree)
+            end
+
             return
         end
 
