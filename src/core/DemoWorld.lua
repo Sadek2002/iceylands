@@ -821,6 +821,8 @@ local function buildGridPath(startPosition, targetPosition)
     return nil
 end
 
+local findGroundAtXZ
+
 local function getTreeStandPosition(startPosition, targetPosition)
     local away = Vector3.new(startPosition.X - targetPosition.X, 0, startPosition.Z - targetPosition.Z)
     if away.Magnitude < 0.1 then
@@ -899,7 +901,7 @@ local function getRaycastParams()
     return params
 end
 
-local function findGroundAtXZ(x, z, yHint)
+findGroundAtXZ = function(x, z, yHint)
     local origin = Vector3.new(x, yHint + 12, z)
     local result = Workspace:Raycast(origin, Vector3.new(0, -34, 0), getRaycastParams())
     if result and result.Instance and result.Instance.CanCollide then
