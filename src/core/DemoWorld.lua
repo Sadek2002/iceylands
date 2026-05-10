@@ -390,43 +390,73 @@ local function aimCameraAtTree(tree)
     end)
 end
 
+local function fireAxeRemotes(tool, tree, trunk, aimPoint)
+    if not tool or not tree then
+        return
+    end
+
+    local container = tree.Instance or tree.Container or tree
+    local targets = { trunk, container, tree, aimPoint }
+
+    for _, remote in ipairs(tool:GetDescendants()) do
+        if remote:IsA("RemoteEvent") then
+            pcall(function() remote:FireServer(trunk) end)
+            pcall(function() remote:FireServer(container) end)
+            pcall(function() remote:FireServer(trunk, aimPoint) end)
+            pcall(function() remote:FireServer(container, trunk, aimPoint) end)
+            pcall(function() remote:FireServer("hit", trunk) end)
+            pcall(function() remote:FireServer("swing", trunk) end)
+        elseif remote:IsA("RemoteFunction") then
+            pcall(function() remote:InvokeServer(trunk) end)
+            pcall(function() remote:InvokeServer(container) end)
+            pcall(function() remote:InvokeServer(trunk, aimPoint) end)
+            pcall(function() remote:InvokeServer(container, trunk, aimPoint) end)
+            pcall(function() remote:InvokeServer("hit", trunk) end)
+            pcall(function() remote:InvokeServer("swing", trunk) end)
+        end
+    end
+end
+
 local function pressLeftClick(tree)
-    -- The axe tool still depends on the camera ray in this game, so aim the camera
-    -- at the trunk then click the computed trunk screen position, never the real cursor.
+    local camera = Workspace.CurrentCamera
+    local trunk = getTrunk(tree)
+    if not camera or not trunk then
+        return false
+    end
+
+    -- Use the trunk center/lower-middle only. This avoids crop/ground clicks and does not
+    -- depend on the user's real cursor position.
     aimCameraAtTree(tree)
-    task.wait()
+    task.wait(0.03)
 
-    local x, y, visible = getTreeScreenPoint(tree)
-    if not visible then
+    local aimPoint = getTreeAimPoint(tree) or trunk.Position
+    local screenPos, visible = camera:WorldToViewportPoint(aimPoint)
+    if not visible or screenPos.Z <= 0 then
         return false
     end
 
-    -- Only click when that exact screen ray hits this tree. This prevents random clicks
-    -- on wheat, seeds, blocks under the player, or the UI toggle.
-    if not screenPointHitsTree(tree, x, y) then
-        return false
-    end
+    local x = math.floor(screenPos.X + 0.5)
+    local y = math.floor(screenPos.Y + 0.5)
 
-    local pos = Vector2.new(x, y)
-
-    if VirtualUser then
-        pcall(function()
-            VirtualUser:Button1Down(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
-            task.wait(0.045)
-            VirtualUser:Button1Up(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
-        end)
-    end
-
+    -- Move the virtual mouse to the trunk first. SendMouseButtonEvent alone can still
+    -- leave the tool reading the old Mouse.Target, which is why you had to click manually.
     if VirtualInputManager then
         pcall(function()
+            VirtualInputManager:SendMouseMoveEvent(x, y, game)
+            task.wait(0.025)
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.045)
+            task.wait(0.055)
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
         end)
     end
 
-    if type(mouse1click) == "function" then
-        pcall(mouse1click)
+    if VirtualUser then
+        pcall(function()
+            local pos = Vector2.new(x, y)
+            VirtualUser:Button1Down(pos, camera.CFrame)
+            task.wait(0.055)
+            VirtualUser:Button1Up(pos, camera.CFrame)
+        end)
     end
 
     return true
@@ -452,13 +482,19 @@ function DemoWorld.ActivateHeldAxe(tree)
     -- This never uses the user's current cursor, so crops/UI/ground cannot be clicked accidentally.
     faceTree(tree)
 
+    local trunk = getTrunk(tree)
+    local aimPoint = getTreeAimPoint(tree) or (trunk and trunk.Position)
+
+    -- First activate normally, then click the trunk screen point, then fire any axe-local
+    -- remotes with the real trunk/container. This covers tools that read Mouse.Target and
+    -- tools that use their own RemoteEvent/RemoteFunction.
     pcall(function()
         tool:Activate()
     end)
 
-    local clicked = pressLeftClick(tree)
+    pressLeftClick(tree)
+    fireAxeRemotes(tool, tree, trunk, aimPoint)
 
-    -- A second Activate helps tools that listen to activation rather than raw mouse input.
     pcall(function()
         tool:Activate()
     end)
