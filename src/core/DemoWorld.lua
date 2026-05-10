@@ -493,7 +493,7 @@ local function requestJump(state, humanoid)
     if humanoid.FloorMaterial == Enum.Material.Air then
         return false
     end
-    if os.clock() - (state.LastJump or 0) < 0.42 then
+    if os.clock() - (state.LastJump or 0) < 1.15 then
         return false
     end
     state.LastJump = os.clock()
@@ -517,13 +517,13 @@ local function maybeJumpForLedge(state, root, humanoid, moveTarget)
     if not grounded(humanoid) or humanoid.FloorMaterial == Enum.Material.Air then
         return false
     end
-    if os.clock() - (state.LastLedgeProbe or 0) < 0.12 then
+    if os.clock() - (state.LastLedgeProbe or 0) < 0.18 then
         return false
     end
     state.LastLedgeProbe = os.clock()
 
     local delta = Vector3.new(moveTarget.X - root.Position.X, 0, moveTarget.Z - root.Position.Z)
-    if delta.Magnitude < 1.0 then
+    if delta.Magnitude < 1.2 then
         return false
     end
 
@@ -538,39 +538,27 @@ local function maybeJumpForLedge(state, root, humanoid, moveTarget)
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = ignore
 
-    -- Only auto-jump when there is an actual ledge directly in front.
-    -- Older versions sampled too far ahead / too wide and jumped just because a future tile was higher.
-    local wallHit = Workspace:Raycast(root.Position + Vector3.new(0, 1.15, 0), dir * 2.6, params)
-    if wallHit and wallHit.Instance and wallHit.Instance.CanCollide then
-        local part = wallHit.Instance
-        local topY = part.Position.Y + part.Size.Y / 2
-        local climb = topY - currentGroundY
-
-        -- The block world uses ~3 stud vertical steps. Jump only for reachable ledges.
-        if climb > 0.7 and climb <= 4.2 then
-            return requestJump(state, humanoid)
-        end
-
-        -- Too high: force a new Roblox path instead of jump-spamming.
-        if climb > 4.2 then
-            state.Waypoints = nil
-            state.LastPathTime = 0
-        end
+    -- Jump only when a solid collidable block is directly blocking the player's body.
+    -- Do not jump for higher floor detected farther ahead, because that caused constant hopping.
+    local bodyOrigin = root.Position + Vector3.new(0, 1.05, 0)
+    local bodyHit = Workspace:Raycast(bodyOrigin, dir * 2.15, params)
+    if not bodyHit or not bodyHit.Instance or not bodyHit.Instance.CanCollide then
         return false
     end
 
-    -- If there is no wall ray hit, only jump when the immediate next floor tile is higher.
-    -- This handles walking up a block edge where the ray slips over the lip.
-    local probe = root.Position + dir * 2.75
-    local nextGroundY = getGroundYAt(probe, ignore)
-    if nextGroundY then
-        local climb = nextGroundY - currentGroundY
-        if climb > 0.9 and climb <= 4.2 then
-            return requestJump(state, humanoid)
-        elseif climb > 4.2 then
-            state.Waypoints = nil
-            state.LastPathTime = 0
-        end
+    local part = bodyHit.Instance
+    local topY = part.Position.Y + part.Size.Y / 2
+    local climb = topY - currentGroundY
+
+    -- 3-stud blocks: jump only if the obstacle top is actually above our current floor
+    -- and within normal jump height. Anything too high forces a repath instead.
+    if climb > 0.85 and climb <= 3.75 then
+        return requestJump(state, humanoid)
+    end
+
+    if climb > 3.75 then
+        state.Waypoints = nil
+        state.LastPathTime = 0
     end
 
     return false
@@ -665,9 +653,7 @@ local function movementTick(state)
             else
                 humanoid:MoveTo(target)
                 maybeJumpForLedge(state, root, humanoid, target)
-                if waypoint.Action == Enum.PathWaypointAction.Jump then
-                    requestJump(state, humanoid)
-                end
+                -- Waypoint jump is intentionally ignored here; the block-world ledge probe handles jumps.
             end
         else
             humanoid:MoveTo(stand)
