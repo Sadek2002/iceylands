@@ -3,6 +3,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local StarterGui = game:GetService("StarterGui")
+local PathfindingService = game:GetService("PathfindingService")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
@@ -36,8 +37,47 @@ local DemoWorld = {
     CurrentPathIndex = 1,
     PathIssuedAt = 0,
     IgnoredTargets = {},
+    LastFullTreeScan = 0,
+    TreeScanCooldown = 3.0,
+    LastCollectibleRefresh = 0,
+    CollectibleRefreshCooldown = 2.25,
+    CachedCollectibles = {},
+    CachedTreeSpawnCount = 0,
+    LastWaypointDistance = math.huge,
+    LastProgressAt = 0,
+    LastStuckRepathAt = 0,
 }
+local function isProbablySaplingOrStump(instance)
+    if not instance then
+        return true
+    end
 
+    local function badName(name)
+        name = string.lower(tostring(name or ""))
+        return string.find(name, "sapling", 1, true)
+            or string.find(name, "seedling", 1, true)
+            or string.find(name, "stump", 1, true)
+            or string.find(name, "sprout", 1, true)
+    end
+
+    if badName(instance.Name) then
+        return true
+    end
+
+    if instance:IsA("Model") then
+        for _, child in ipairs(instance:GetDescendants()) do
+            if badName(child.Name) then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+local function isLiveTreeInstance(instance)
+    return instance ~= nil and instance.Parent ~= nil and not isProbablySaplingOrStump(instance)
+end
 
 local function isLiveTarget(target)
     if not target or not target.Parent or target:GetAttribute("Collected") then
@@ -46,7 +86,7 @@ local function isLiveTarget(target)
 
     local sourcePath = target:GetAttribute("SourceTreePath")
     if sourcePath and sourcePath ~= "" then
-        return getLiveTreeForMarker(target) ~= nil
+        return isLiveTreeInstance(getLiveTreeForMarker(target))
     end
 
     local hitsRemaining = target:GetAttribute("HitsRemaining")
@@ -178,32 +218,14 @@ function getLiveTreeForMarker(marker)
 
     local path = marker:GetAttribute("SourceTreePath")
     local tree = resolveWorkspacePath(path)
-    if tree and tree.Parent then
+    if isLiveTreeInstance(tree) then
         return tree
     end
 
-    -- Fallback: path names can change after a tree is chopped. Treat a nearby known tree as alive.
-    local markerPos = marker.Position
-    local nearest
-    local nearestDistance = 12
-    for _, item in ipairs(Workspace:GetDescendants()) do
-        if (item:IsA("Model") or item:IsA("BasePart")) then
-            local name = string.lower(item.Name)
-            local looksLikeTree = string.find(name, "tree", 1, true) ~= nil
-            if looksLikeTree then
-                local pos = getInstancePosition(item)
-                if pos then
-                    local distance = (Vector3.new(markerPos.X, 0, markerPos.Z) - Vector3.new(pos.X, 0, pos.Z)).Magnitude
-                    if distance < nearestDistance then
-                        nearest = item
-                        nearestDistance = distance
-                    end
-                end
-            end
-        end
-    end
-
-    return nearest
+    -- Important: do not fallback to nearby objects here. After a tree breaks,
+    -- a sapling/stump can remain in the same spot and the farm would keep
+    -- clicking it forever instead of moving to the next tree.
+    return nil
 end
 
 local function getTreePosition(marker)
@@ -245,7 +267,22 @@ function DemoWorld.EnsureObjects()
     return folder
 end
 
-function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
+function DemoWorld.SpawnObjectsAtTreePositions(maxObjects, force)
+    local now = os.clock()
+    local existingFolder = Workspace:FindFirstChild(DemoWorld.FolderName)
+    if not force and existingFolder and (now - DemoWorld.LastFullTreeScan) < DemoWorld.TreeScanCooldown then
+        local aliveCount = 0
+        for _, item in ipairs(existingFolder:GetChildren()) do
+            if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
+                aliveCount += 1
+            end
+        end
+        if aliveCount > 0 then
+            return aliveCount
+        end
+    end
+
+    DemoWorld.LastFullTreeScan = now
     DemoWorld.ClearObjects()
 
     local folder = getFolder()
@@ -462,7 +499,11 @@ local function damageDemoTree(target, onCollect)
     pressLeftClick(clickTarget)
     DemoWorld.ActivateHeldAxe(clickTarget)
 
-    if target:GetAttribute("SourceTreePath") and not getLiveTreeForMarker(target) then
+    -- Yield very briefly so the game can remove/replace the chopped tree before
+    -- we decide whether to keep hitting this marker.
+    task.wait(0.03)
+
+    if target:GetAttribute("SourceTreePath") and not isLiveTreeInstance(getLiveTreeForMarker(target)) then
         target:SetAttribute("Collected", true)
         target:Destroy()
         if onCollect then
@@ -506,73 +547,50 @@ function DemoWorld.ClearObjects()
     end
 end
 
-function DemoWorld.GetCollectibles()
+function DemoWorld.GetCollectibles(forceRefresh)
+    local now = os.clock()
+
+    if not forceRefresh and DemoWorld.CachedCollectibles and #DemoWorld.CachedCollectibles > 0 and (now - (DemoWorld.LastCollectibleRefresh or 0)) < DemoWorld.CollectibleRefreshCooldown then
+        local liveCached = {}
+        for _, item in ipairs(DemoWorld.CachedCollectibles) do
+            if isLiveTarget(item) then
+                table.insert(liveCached, item)
+            end
+        end
+        if #liveCached > 0 then
+            DemoWorld.CachedCollectibles = liveCached
+            return liveCached
+        end
+    end
+
     local folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     if not folder then
-        DemoWorld.SpawnObjectsAtTreePositions(10)
+        DemoWorld.SpawnObjectsAtTreePositions(10, true)
+        folder = Workspace:FindFirstChild(DemoWorld.FolderName)
+    elseif forceRefresh or (now - (DemoWorld.LastFullTreeScan or 0)) >= DemoWorld.TreeScanCooldown then
+        DemoWorld.SpawnObjectsAtTreePositions(10, true)
         folder = Workspace:FindFirstChild(DemoWorld.FolderName)
     end
 
     local items = {}
-    if not folder then
-        return items
-    end
-
-    for _, item in ipairs(folder:GetChildren()) do
-        if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
-            local sourcePath = item:GetAttribute("SourceTreePath")
-            if sourcePath and sourcePath ~= "" and not getLiveTreeForMarker(item) then
-                item:SetAttribute("Collected", true)
-                item:Destroy()
-            else
-                table.insert(items, item)
-            end
-        end
-    end
-
-    if #items == 0 then
-        DemoWorld.SpawnObjectsAtTreePositions(10)
-        folder = Workspace:FindFirstChild(DemoWorld.FolderName)
-        if folder then
-            for _, item in ipairs(folder:GetChildren()) do
-                if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
+    if folder then
+        for _, item in ipairs(folder:GetChildren()) do
+            if item:IsA("BasePart") and item:GetAttribute("IceylandsDemoObject") and not item:GetAttribute("Collected") then
+                local sourcePath = item:GetAttribute("SourceTreePath")
+                if sourcePath and sourcePath ~= "" and not isLiveTreeInstance(getLiveTreeForMarker(item)) then
+                    item:SetAttribute("Collected", true)
+                    item:Destroy()
+                else
                     table.insert(items, item)
                 end
             end
         end
     end
 
+    DemoWorld.CachedCollectibles = items
+    DemoWorld.LastCollectibleRefresh = now
     return items
 end
-
-function DemoWorld.GetNearestCollectible()
-    local root = getRoot()
-    if not root then
-        return nil
-    end
-
-    local nearest
-    local nearestDistance = math.huge
-
-    for _, item in ipairs(DemoWorld.GetCollectibles()) do
-        local distance = (root.Position - item.Position).Magnitude
-        if distance < nearestDistance then
-            nearest = item
-            nearestDistance = distance
-        end
-    end
-
-    return nearest, nearestDistance
-end
-
-
-local GRID_SIZE = 3
-local MAX_PATH_RADIUS = 180
-local MAX_JUMP_HEIGHT = 4.25
-local MAX_DROP_HEIGHT = 7.0
-local WAYPOINT_REACHED_DISTANCE = 3.2
-local TREE_STAND_MIN_DISTANCE = 5
-local TREE_STAND_MAX_DISTANCE = 10
 
 local function notifyPathWarning(text)
     warn("Iceylands: " .. text)
@@ -658,6 +676,31 @@ local function closestNode(nodes, position, minDist, maxDist)
     return best
 end
 
+local function smoothGridPath(path)
+    if not path or #path <= 2 then
+        return path
+    end
+
+    -- Keep turns/elevation changes, but remove every-other point on straight flat runs.
+    -- This keeps bridge/void safety from the grid path while making the humanoid move
+    -- more like a player instead of stopping on every single block.
+    local smoothed = { path[1] }
+    for i = 2, #path - 1 do
+        local prev = smoothed[#smoothed]
+        local current = path[i]
+        local nextPoint = path[i + 1]
+        local sameLineX = math.abs(prev.X - current.X) < 0.1 and math.abs(current.X - nextPoint.X) < 0.1
+        local sameLineZ = math.abs(prev.Z - current.Z) < 0.1 and math.abs(current.Z - nextPoint.Z) < 0.1
+        local flatEnough = math.abs(prev.Y - current.Y) < 0.35 and math.abs(current.Y - nextPoint.Y) < 0.35
+
+        if not ((sameLineX or sameLineZ) and flatEnough) then
+            table.insert(smoothed, current)
+        end
+    end
+    table.insert(smoothed, path[#path])
+    return smoothed
+end
+
 local function reconstructPath(cameFrom, current, nodes)
     local reversed = { current }
     while cameFrom[current] do
@@ -672,7 +715,7 @@ local function reconstructPath(cameFrom, current, nodes)
             table.insert(path, Vector3.new(node.X, node.TopY + 3.0, node.Z))
         end
     end
-    return path
+    return smoothGridPath(path)
 end
 
 local function buildGridPath(startPosition, targetPosition)
@@ -758,6 +801,65 @@ local function buildGridPath(startPosition, targetPosition)
     return nil
 end
 
+local function getTreeStandPosition(startPosition, targetPosition)
+    local away = Vector3.new(startPosition.X - targetPosition.X, 0, startPosition.Z - targetPosition.Z)
+    if away.Magnitude < 0.1 then
+        away = Vector3.new(1, 0, 0)
+    end
+    return targetPosition + away.Unit * 6
+end
+
+local function buildRobloxPath(startPosition, targetPosition)
+    local standPosition = getTreeStandPosition(startPosition, targetPosition)
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentJumpHeight = 8,
+        AgentMaxSlope = 45,
+        WaypointSpacing = 6,
+    })
+
+    local ok = pcall(function()
+        path:ComputeAsync(startPosition, standPosition)
+    end)
+
+    if not ok or path.Status ~= Enum.PathStatus.Success then
+        return nil
+    end
+
+    local waypoints = path:GetWaypoints()
+    if not waypoints or #waypoints == 0 then
+        return nil
+    end
+
+    local points = {}
+    for _, waypoint in ipairs(waypoints) do
+        table.insert(points, {
+            Position = waypoint.Position,
+            Action = waypoint.Action,
+        })
+    end
+    return points
+end
+
+local function normalizePathPoint(point)
+    if typeof(point) == "Vector3" then
+        return point, nil
+    end
+    if type(point) == "table" then
+        return point.Position, point.Action
+    end
+    return nil, nil
+end
+
+local function buildMovementPath(startPosition, targetPosition)
+    -- Roblox pathfinding is much smoother and cheaper. The old block-grid
+    -- fallback caused heavy FPS drops after trees broke, so movement now
+    -- ignores a tree if Roblox cannot pathfind to it.
+    return buildRobloxPath(startPosition, targetPosition)
+end
+
 local function getNearestReachableCollectible()
     local root = getRoot()
     if not root then
@@ -766,7 +868,7 @@ local function getNearestReachableCollectible()
 
     local now = os.clock()
     local candidates = {}
-    for _, item in ipairs(DemoWorld.GetCollectibles()) do
+    for _, item in ipairs(DemoWorld.GetCollectibles(false)) do
         if isLiveTarget(item) and (not DemoWorld.IgnoredTargets[item] or DemoWorld.IgnoredTargets[item] < now) then
             local targetPosition = getTreePosition(item)
             if targetPosition then
@@ -783,8 +885,10 @@ local function getNearestReachableCollectible()
         return a.Distance < b.Distance
     end)
 
-    for _, candidate in ipairs(candidates) do
-        local path = buildGridPath(root.Position, candidate.Position)
+    local maxPathChecks = math.min(#candidates, 2)
+    for i = 1, maxPathChecks do
+        local candidate = candidates[i]
+        local path = buildMovementPath(root.Position, candidate.Position)
         if path and #path > 0 then
             return candidate.Item, path
         end
@@ -800,32 +904,58 @@ local function followMovementPath(path, targetPosition)
     local humanoid = getHumanoid()
     local root = getRoot()
     if not humanoid or not root or not path or #path == 0 then
-        return false
+        return false, false
     end
 
     local index = math.clamp(DemoWorld.CurrentPathIndex or 1, 1, #path)
-    local waypoint = path[index]
-    local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(waypoint.X, 0, waypoint.Z)).Magnitude
 
-    if flatDistance <= WAYPOINT_REACHED_DISTANCE then
-        index += 1
-        DemoWorld.CurrentPathIndex = index
-        if index > #path then
-            return true
+    -- Advance through already-reached points without forcing a stop per block.
+    while index <= #path do
+        local point = normalizePathPoint(path[index])
+        if not point then
+            break
         end
-        waypoint = path[index]
+        local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(point.X, 0, point.Z)).Magnitude
+        if flatDistance > WAYPOINT_REACHED_DISTANCE then
+            break
+        end
+        index += 1
     end
 
-    if waypoint.Y - root.Position.Y > 1.5 then
+    DemoWorld.CurrentPathIndex = index
+    if index > #path then
+        return true, false
+    end
+
+    local waypoint, action = normalizePathPoint(path[index])
+    if not waypoint then
+        return true, false
+    end
+    local waypointDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(waypoint.X, 0, waypoint.Z)).Magnitude
+
+    -- Stuck detection: if we are not getting closer for a short time, rebuild once.
+    local now = os.clock()
+    if waypointDistance + 0.2 < (DemoWorld.LastWaypointDistance or math.huge) then
+        DemoWorld.LastWaypointDistance = waypointDistance
+        DemoWorld.LastProgressAt = now
+    elseif (now - (DemoWorld.LastProgressAt or now)) > 2.2 and (now - (DemoWorld.LastStuckRepathAt or 0)) > 2.5 then
+        DemoWorld.LastStuckRepathAt = now
+        DemoWorld.LastWaypointDistance = math.huge
+        DemoWorld.LastProgressAt = now
+        return false, true
+    end
+
+    if action == Enum.PathWaypointAction.Jump or waypoint.Y - root.Position.Y > 1.25 then
         humanoid.Jump = true
     end
 
-    if os.clock() - DemoWorld.MoveToIssuedAt >= 0.35 then
-        DemoWorld.MoveToIssuedAt = os.clock()
+    -- Less spam and smoother motion: MoveTo the current safe waypoint and let Roblox keep walking.
+    if now - DemoWorld.MoveToIssuedAt >= 0.65 then
+        DemoWorld.MoveToIssuedAt = now
         humanoid:MoveTo(waypoint)
     end
 
-    return false
+    return false, false
 end
 
 function DemoWorld.SetMovementDemo(enabled)
@@ -848,11 +978,11 @@ function DemoWorld.SetMovementDemo(enabled)
     DemoWorld.MoveToIssuedAt = 0
     DemoWorld.IgnoredTargets = {}
     equipBestAxeThrottled(true)
-    DemoWorld.SpawnObjectsAtTreePositions(10)
+    DemoWorld.SpawnObjectsAtTreePositions(10, true)
 
-    -- Movement mode now uses a simple block-grid A* path:
-    -- it walks on real collidable blocks/bridges only, ignores void gaps,
-    -- jumps 1-block ledges, and keeps the same tree locked until it breaks.
+    -- Movement mode locks one tree at a time. It does not rescan constantly,
+    -- and it releases the target as soon as the original tree is gone/replaced
+    -- by a sapling/stump so it can move to the next real tree.
     DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function()
         local now = os.clock()
         local root = getRoot()
@@ -872,7 +1002,8 @@ function DemoWorld.SetMovementDemo(enabled)
             end
 
             DemoWorld.LastTargetSearch = now
-            DemoWorld.SpawnObjectsAtTreePositions(10)
+            -- Refresh once after a tree disappears, then pick the nearest reachable tree.
+            DemoWorld.GetCollectibles(true)
             target, DemoWorld.CurrentPath = getNearestReachableCollectible()
             if not isLiveTarget(target) then
                 return
@@ -881,6 +1012,8 @@ function DemoWorld.SetMovementDemo(enabled)
             DemoWorld.CurrentMoveTarget = target
             DemoWorld.CurrentPathIndex = 1
             DemoWorld.MoveToIssuedAt = 0
+            DemoWorld.LastWaypointDistance = math.huge
+            DemoWorld.LastProgressAt = now
             equipBestAxeThrottled(true)
         else
             equipBestAxeThrottled(false)
@@ -908,13 +1041,20 @@ function DemoWorld.SetMovementDemo(enabled)
 
             if now - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
                 DemoWorld.LastTreeClick = now
-                damageDemoTree(target)
+                local hitOk = damageDemoTree(target)
+                if hitOk and not isLiveTarget(target) then
+                    DemoWorld.CurrentMoveTarget = nil
+                    DemoWorld.CurrentPath = nil
+                    DemoWorld.CurrentPathIndex = 1
+                    DemoWorld.CachedCollectibles = {}
+                    DemoWorld.LastTargetSearch = 0
+                end
             end
             return
         end
 
         if not DemoWorld.CurrentPath or #DemoWorld.CurrentPath == 0 then
-            local path = buildGridPath(root.Position, targetPosition)
+            local path = buildMovementPath(root.Position, targetPosition)
             if not path or #path == 0 then
                 DemoWorld.IgnoredTargets[target] = now + 20
                 DemoWorld.CurrentMoveTarget = nil
@@ -926,10 +1066,27 @@ function DemoWorld.SetMovementDemo(enabled)
             DemoWorld.CurrentPathIndex = 1
         end
 
-        local finishedPath = followMovementPath(DemoWorld.CurrentPath, targetPosition)
+        local finishedPath, needsRepath = followMovementPath(DemoWorld.CurrentPath, targetPosition)
+        if needsRepath then
+            local path = buildMovementPath(root.Position, targetPosition)
+            if path and #path > 0 then
+                DemoWorld.CurrentPath = path
+                DemoWorld.CurrentPathIndex = 1
+                DemoWorld.MoveToIssuedAt = 0
+                DemoWorld.LastWaypointDistance = math.huge
+                DemoWorld.LastProgressAt = now
+            else
+                DemoWorld.IgnoredTargets[target] = now + 20
+                DemoWorld.CurrentMoveTarget = nil
+                DemoWorld.CurrentPath = nil
+                notifyPathWarning("Can't pathfind to tree; ignoring it.")
+            end
+            return
+        end
+
         if finishedPath then
             -- Rebuild from the current spot if we reached the last safe block but are still outside axe range.
-            local path = buildGridPath(root.Position, targetPosition)
+            local path = buildMovementPath(root.Position, targetPosition)
             if path and #path > 0 then
                 DemoWorld.CurrentPath = path
                 DemoWorld.CurrentPathIndex = 1
@@ -987,7 +1144,7 @@ function DemoWorld.SetAutoCollectDemo(enabled, onCollect)
     end
 
     removeDemoAxe()
-    DemoWorld.SpawnObjectsAtTreePositions(10)
+    DemoWorld.SpawnObjectsAtTreePositions(10, true)
     DemoWorld.EquipBestAxe()
 
     task.spawn(function()
