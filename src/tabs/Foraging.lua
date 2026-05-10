@@ -146,10 +146,8 @@ function Foraging.Mount(parent, services)
 
         if value then
             DemoWorld.ClearObjects()
-            local count = DemoWorld.SpawnObjectsAtTreePositions(25)
             DemoWorld.EquipBestAxe()
             DemoWorld.SetOverlayDemo(services.Root, true)
-            services.Toasts:Push(count > 0 and "Tree movement ready" or "No tree positions found", count > 0 and "success" or "warn")
         else
             DemoWorld.SetOverlayDemo(services.Root, false)
         end

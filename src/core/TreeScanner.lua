@@ -3,20 +3,12 @@ local Workspace = game:GetService("Workspace")
 
 local TreeScanner = {}
 
-TreeScanner.MaxDistance = 180
-TreeScanner.CacheTTL = 1.25
-TreeScanner._cache = nil
+TreeScanner.MaxDistance = 260
+TreeScanner.CacheTTL = 2.0
+TreeScanner._cache = {}
 TreeScanner._cacheTime = 0
 
-local TREE_NAMES = {
-    tree1 = true,
-    tree2 = true,
-    tree3 = true,
-    tree4 = true,
-    treeorange = true,
-}
-
-local FRIENDLY_NAMES = {
+local TREE_TYPES = {
     tree1 = "Tree 1",
     tree2 = "Tree 2",
     tree3 = "Tree 3",
@@ -28,25 +20,23 @@ local function lowerName(obj)
     return string.lower(obj and obj.Name or "")
 end
 
-local function getRoot()
-    local player = Players.LocalPlayer
-    local character = player and player.Character
-    return character and character:FindFirstChild("HumanoidRootPart")
-end
-
 local function flatDistance(a, b)
     local dx = a.X - b.X
     local dz = a.Z - b.Z
     return math.sqrt(dx * dx + dz * dz)
 end
 
-local function isPlayerCharacter(obj)
+local function getRoot()
     local player = Players.LocalPlayer
-    return player and player.Character and obj and obj:IsDescendantOf(player.Character)
+    local character = player and player.Character
+    return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function findPart(container, name)
-    local wanted = string.lower(name)
+local function findPart(container, partName)
+    if not container then
+        return nil
+    end
+    local wanted = string.lower(partName)
     for _, obj in ipairs(container:GetDescendants()) do
         if obj:IsA("BasePart") and string.lower(obj.Name) == wanted then
             return obj
@@ -55,7 +45,10 @@ local function findPart(container, name)
     return nil
 end
 
-local function findAnyPart(container)
+local function findFirstBasePart(container)
+    if not container then
+        return nil
+    end
     if container:IsA("BasePart") then
         return container
     end
@@ -78,37 +71,57 @@ local function getIslandOf(obj)
     return nil
 end
 
-local function getPlayerIsland(root)
+local function getIslandFromHit(root)
     if not root then
         return nil
     end
 
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = { Players.LocalPlayer.Character }
+
+    local hit = Workspace:Raycast(root.Position + Vector3.new(0, 8, 0), Vector3.new(0, -80, 0), params)
+    if hit and hit.Instance then
+        return getIslandOf(hit.Instance)
+    end
+    return nil
+end
+
+local function getNearestIsland(root)
     local islands = Workspace:FindFirstChild("Islands")
-    if not islands then
+    if not islands or not root then
         return nil
     end
 
-    local closest, best = nil, math.huge
+    local bestIsland, bestDist = nil, math.huge
     for _, island in ipairs(islands:GetChildren()) do
         local blocks = island:FindFirstChild("Blocks") or island
-        local any = findAnyPart(blocks)
-        if any then
-            local d = flatDistance(root.Position, any.Position)
-            if d < best then
-                closest = island
-                best = d
+        for _, part in ipairs(blocks:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                local d = flatDistance(root.Position, part.Position)
+                if d < bestDist then
+                    bestDist = d
+                    bestIsland = island
+                end
             end
         end
     end
-    return closest
+    return bestIsland
+end
+
+local function getPlayerIsland(root)
+    return getIslandFromHit(root) or getNearestIsland(root)
 end
 
 local function isTreeContainer(obj)
-    -- Trees can be Folder, Model, or other containers depending on replication.
-    return obj and TREE_NAMES[lowerName(obj)] == true and not isPlayerCharacter(obj)
+    local raw = lowerName(obj)
+    if TREE_TYPES[raw] then
+        return true
+    end
+    return false
 end
 
-local function isLiveContainer(container)
+local function isLiveTreeContainer(container)
     if not container or not container.Parent or not isTreeContainer(container) then
         return false
     end
@@ -118,95 +131,117 @@ local function isLiveContainer(container)
         return false
     end
 
-    -- A chopped tree usually loses leaves/spawner. Keep this loose so honey/orange variants still count.
+    -- Saplings/stumps usually lose leaves/spawner. Keep orange/honey variants valid.
     local leaves = findPart(container, "leaves")
-    local spawner = container:FindFirstChild("LeafSpawner", true)
-    return leaves ~= nil or spawner ~= nil or trunk.Size.Y > 8
+    local leafSpawner = container:FindFirstChild("LeafSpawner", true)
+    return leaves ~= nil or leafSpawner ~= nil or trunk.Size.Y >= 8
 end
 
-local function getTreePosition(container)
+local function getTreeBase(container)
     local trunk = findPart(container, "trunk")
     if not trunk then
         return nil, nil
     end
-
-    local baseY = trunk.Position.Y - (trunk.Size.Y * 0.5) + 2.5
-    return Vector3.new(trunk.Position.X, baseY, trunk.Position.Z), trunk
+    local y = trunk.Position.Y - (trunk.Size.Y * 0.5) + 2.5
+    return Vector3.new(trunk.Position.X, y, trunk.Position.Z), trunk
 end
 
-local function addTree(list, seen, container, root, playerIsland)
-    if seen[container] or not isLiveContainer(container) then
+local function countParts(container)
+    local count = 0
+    for _, obj in ipairs(container:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            count += 1
+        end
+    end
+    return count
+end
+
+local function addCandidate(results, seen, container, root, playerIsland, allowOtherIslands)
+    if seen[container] or not isLiveTreeContainer(container) then
         return
     end
     seen[container] = true
 
-    local pos, trunk = getTreePosition(container)
+    local island = getIslandOf(container)
+    if playerIsland and island and island ~= playerIsland and not allowOtherIslands then
+        return
+    end
+
+    local pos, trunk = getTreeBase(container)
     if not pos or not trunk then
         return
     end
 
-    local island = getIslandOf(container)
-    -- Prefer local island; fallback still allows scanning if island detection fails.
-    if playerIsland and island and island ~= playerIsland then
-        return
-    end
-
-    local dist = root and flatDistance(root.Position, pos) or 0
-    if root and dist > TreeScanner.MaxDistance then
+    local distance = root and flatDistance(root.Position, pos) or 0
+    if root and distance > TreeScanner.MaxDistance then
         return
     end
 
     local raw = lowerName(container)
-    table.insert(list, {
-        Name = FRIENDLY_NAMES[raw] or container.Name,
+    table.insert(results, {
+        Name = TREE_TYPES[raw] or container.Name,
         RawName = container.Name,
+        Type = raw,
         Path = container:GetFullName(),
         Instance = container,
         Container = container,
         Island = island,
         Trunk = trunk,
         Position = pos,
-        Distance = math.floor(dist * 10 + 0.5) / 10,
+        PartCount = countParts(container),
+        Distance = math.floor(distance * 10 + 0.5) / 10,
     })
+end
+
+local function scanBlocksFolder(blocks, results, seen, root, playerIsland, allowOtherIslands)
+    if not blocks then
+        return
+    end
+
+    -- Fast path: trees are direct children of island.Blocks in your export.
+    for _, child in ipairs(blocks:GetChildren()) do
+        if isTreeContainer(child) then
+            addCandidate(results, seen, child, root, playerIsland, allowOtherIslands)
+        end
+    end
+
+    -- Fallback for replicated worlds where tree folders are nested one level deeper.
+    for _, obj in ipairs(blocks:GetDescendants()) do
+        if isTreeContainer(obj) then
+            addCandidate(results, seen, obj, root, playerIsland, allowOtherIslands)
+        end
+    end
 end
 
 local function scanAll(root)
     local results = {}
     local seen = {}
+    local islands = Workspace:FindFirstChild("Islands")
     local playerIsland = getPlayerIsland(root)
 
-    local islands = Workspace:FindFirstChild("Islands")
-    local roots = {}
-
     if playerIsland then
-        table.insert(roots, playerIsland)
-    elseif islands then
-        for _, island in ipairs(islands:GetChildren()) do
-            table.insert(roots, island)
-        end
-    else
-        table.insert(roots, Workspace)
+        scanBlocksFolder(playerIsland:FindFirstChild("Blocks") or playerIsland, results, seen, root, playerIsland, false)
     end
 
-    for _, scanRoot in ipairs(roots) do
-        for _, obj in ipairs(scanRoot:GetDescendants()) do
-            if isTreeContainer(obj) then
-                addTree(results, seen, obj, root, playerIsland)
-            end
-        end
-    end
-
-    -- Last-resort fallback for worlds where player-island detection guesses wrong.
+    -- If player-island detection failed, scan all islands but still obey distance.
     if #results == 0 and islands then
-        for _, obj in ipairs(islands:GetDescendants()) do
-            if isTreeContainer(obj) then
-                addTree(results, seen, obj, root, nil)
-            end
+        for _, island in ipairs(islands:GetChildren()) do
+            scanBlocksFolder(island:FindFirstChild("Blocks") or island, results, seen, root, nil, true)
         end
+    end
+
+    -- Final fallback for non-island testing.
+    if #results == 0 then
+        scanBlocksFolder(Workspace, results, seen, root, nil, true)
     end
 
     table.sort(results, function(a, b)
-        return (a.Distance or math.huge) < (b.Distance or math.huge)
+        local ad = a.Distance or math.huge
+        local bd = b.Distance or math.huge
+        if ad == bd then
+            return tostring(a.Path) < tostring(b.Path)
+        end
+        return ad < bd
     end)
 
     return results
@@ -214,7 +249,7 @@ end
 
 function TreeScanner.IsLiveTree(tree)
     local container = tree and (tree.Instance or tree.Container or tree)
-    return isLiveContainer(container)
+    return isLiveTreeContainer(container)
 end
 
 function TreeScanner.RefreshCache(maxTrees)
