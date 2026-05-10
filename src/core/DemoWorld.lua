@@ -493,12 +493,21 @@ local function requestJump(state, humanoid)
     if humanoid.FloorMaterial == Enum.Material.Air then
         return false
     end
-    if os.clock() - (state.LastJump or 0) < 0.75 then
+    if os.clock() - (state.LastJump or 0) < 0.42 then
         return false
     end
     state.LastJump = os.clock()
     humanoid.Jump = true
+    pcall(function()
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    end)
     return true
+end
+
+local function rotateFlat(dir, radians)
+    local c = math.cos(radians)
+    local s = math.sin(radians)
+    return Vector3.new(dir.X * c - dir.Z * s, 0, dir.X * s + dir.Z * c)
 end
 
 local function maybeJumpForLedge(state, root, humanoid, moveTarget)
@@ -510,49 +519,59 @@ local function maybeJumpForLedge(state, root, humanoid, moveTarget)
     end
 
     local delta = Vector3.new(moveTarget.X - root.Position.X, 0, moveTarget.Z - root.Position.Z)
-    if delta.Magnitude < 1 then
+    if delta.Magnitude < 0.75 then
         return false
     end
 
-    local dir = delta.Unit
+    local baseDir = delta.Unit
     local ignore = {getCharacter()}
     local currentGroundY = getGroundYAt(root.Position, ignore)
     if not currentGroundY then
         return false
     end
 
-    -- Check the tile a little in front of the player. In this block world the
-    -- next walkable ledge is usually 3 studs higher than the current tile.
-    local probe = root.Position + dir * 4
-    local nextGroundY, nextGround = getGroundYAt(probe, ignore)
-    if nextGroundY then
-        local climb = nextGroundY - currentGroundY
-        if climb > 0.9 and climb <= 4.2 then
-            return requestJump(state, humanoid)
-        elseif climb > 4.2 then
-            -- Too high to jump cleanly; force a fresh Roblox path instead of
-            -- repeatedly walking into the wall.
-            state.Waypoints = nil
-            state.LastPathTime = 0
-            return false
-        end
-    end
-
-    -- Extra wall check for ledges where the top ray misses due to being close
-    -- to the block edge.
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = ignore
-    local wallHit = Workspace:Raycast(root.Position + Vector3.new(0, 1.25, 0), dir * 3.25, params)
-    if wallHit and wallHit.Instance and wallHit.Instance.CanCollide then
-        local part = wallHit.Instance
-        local topY = part.Position.Y + part.Size.Y / 2
-        local climb = topY - currentGroundY
-        if climb > 0.9 and climb <= 4.2 then
-            return requestJump(state, humanoid)
-        elseif climb > 4.2 then
-            state.Waypoints = nil
-            state.LastPathTime = 0
+
+    -- Probe a small fan in front of the character. The game uses 3x3 blocks,
+    -- so a single center ray often misses the corner of the ledge and the bot
+    -- just pushes into it. These rays detect the actual block face in front.
+    local angles = {0, math.rad(18), math.rad(-18), math.rad(34), math.rad(-34)}
+    for _, angle in ipairs(angles) do
+        local dir = rotateFlat(baseDir, angle)
+
+        -- If the next tile ahead is one block higher, jump before the wall stops movement.
+        for _, dist in ipairs({2.25, 3.25, 4.25, 5.25}) do
+            local probe = root.Position + dir * dist
+            local nextGroundY = getGroundYAt(probe, ignore)
+            if nextGroundY then
+                local climb = nextGroundY - currentGroundY
+                if climb > 0.65 and climb <= 4.75 then
+                    return requestJump(state, humanoid)
+                elseif climb > 4.75 then
+                    state.Waypoints = nil
+                    state.LastPathTime = 0
+                    return false
+                end
+            end
+        end
+
+        -- Detect a block face directly in front, then compare its top to the floor.
+        for _, height in ipairs({0.75, 1.45, 2.25}) do
+            local wallHit = Workspace:Raycast(root.Position + Vector3.new(0, height, 0), dir * 3.8, params)
+            if wallHit and wallHit.Instance and wallHit.Instance.CanCollide then
+                local part = wallHit.Instance
+                local topY = part.Position.Y + part.Size.Y / 2
+                local climb = topY - currentGroundY
+                if climb > 0.65 and climb <= 4.75 then
+                    return requestJump(state, humanoid)
+                elseif climb > 4.75 then
+                    state.Waypoints = nil
+                    state.LastPathTime = 0
+                    return false
+                end
+            end
         end
     end
 
