@@ -43,6 +43,15 @@ local function makePart(name, position, color)
     return part
 end
 
+local function makeTreePoint(name, position)
+    local part = makePart(name, position, Color3.fromRGB(106, 202, 255))
+    part.Size = Vector3.new(1.25, 1.25, 1.25)
+    part.Shape = Enum.PartType.Ball
+    part.Material = Enum.Material.Neon
+    part.Transparency = 0.12
+    return part
+end
+
 local function isTreeCandidate(item)
     local name = string.lower(item.Name)
 
@@ -112,16 +121,54 @@ function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
         return a.Distance < b.Distance
     end)
 
+    local clusters = {}
+    local clusterRadius = 16
+
+    for _, candidate in ipairs(candidates) do
+        local assigned = false
+
+        for _, cluster in ipairs(clusters) do
+            local flatCandidate = Vector3.new(candidate.Position.X, 0, candidate.Position.Z)
+            local flatCluster = Vector3.new(cluster.Center.X, 0, cluster.Center.Z)
+
+            if (flatCandidate - flatCluster).Magnitude <= clusterRadius then
+                cluster.Count += 1
+                cluster.Sum += candidate.Position
+                cluster.Center = cluster.Sum / cluster.Count
+                cluster.MinY = math.min(cluster.MinY, candidate.Position.Y)
+                table.insert(cluster.Names, candidate.Name)
+                assigned = true
+                break
+            end
+        end
+
+        if not assigned then
+            table.insert(clusters, {
+                Count = 1,
+                Sum = candidate.Position,
+                Center = candidate.Position,
+                MinY = candidate.Position.Y,
+                Distance = candidate.Distance,
+                Names = { candidate.Name },
+            })
+        end
+    end
+
+    table.sort(clusters, function(a, b)
+        return a.Distance < b.Distance
+    end)
+
     local created = 0
-    for index, candidate in ipairs(candidates) do
+    for index, cluster in ipairs(clusters) do
         if created >= (maxObjects or 10) then
             break
         end
 
-        local part = makePart("DemoTreePoint" .. index, candidate.Position, Color3.fromRGB(106, 202, 255))
+        local position = Vector3.new(cluster.Center.X, cluster.MinY + 0.75, cluster.Center.Z)
+        local part = makeTreePoint("DemoTreePoint" .. index, position)
         part:SetAttribute("IceylandsDemoObject", true)
         part:SetAttribute("Collected", false)
-        part:SetAttribute("SourceTreeName", candidate.Name)
+        part:SetAttribute("SourceTreeName", table.concat(cluster.Names, ", "))
         part.Parent = folder
         created += 1
     end
