@@ -111,22 +111,9 @@ function DemoWorld.ClearObjects()
 end
 
 function DemoWorld.SpawnObjectsAtTreePositions(maxObjects)
-    DemoWorld.ClearObjects()
-
-    local folder = getFolder()
-    local trees = TreeScanner.GetClusters(maxObjects or 25)
-
-    local created = 0
-    for index, tree in ipairs(trees) do
-        if created >= (maxObjects or 25) then
-            break
-        end
-        local part = makeTreePoint(tree, index)
-        part.Parent = folder
-        created += 1
-    end
-
-    return created
+    -- No physical demo markers: they can steal mouse clicks and lag.
+    local trees = TreeScanner.GetClusters(maxObjects or 25, true)
+    return #trees
 end
 
 local function findBestAxeIn(container)
@@ -215,6 +202,26 @@ local function isTreeLive(tree)
     return tree and tree.Instance and TreeScanner.IsLiveTree(tree)
 end
 
+local function groundAt(x, z, ignore)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = ignore or { getCharacter() }
+
+    local result = Workspace:Raycast(Vector3.new(x, 220, z), Vector3.new(0, -500, 0), params)
+    if result and result.Instance and result.Instance.CanCollide then
+        return result.Position
+    end
+    return nil
+end
+
+local function hasHeadClearance(pos)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = { getCharacter() }
+    local hit = Workspace:Raycast(pos + Vector3.new(0, 2, 0), Vector3.new(0, 4, 0), params)
+    return hit == nil
+end
+
 local function getStandPosition(tree)
     local root = getRoot()
     local trunk = getTrunk(tree)
@@ -223,17 +230,44 @@ local function getStandPosition(tree)
     end
 
     local base = Vector3.new(trunk.Position.X, trunk.Position.Y - trunk.Size.Y / 2 + 2.5, trunk.Position.Z)
+    local radius = math.max(5, math.min(8, (trunk.Size.X + trunk.Size.Z) * 0.25))
+    local dirs = {
+        Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0),
+        Vector3.new(0, 0, 1), Vector3.new(0, 0, -1),
+        Vector3.new(1, 0, 1).Unit, Vector3.new(1, 0, -1).Unit,
+        Vector3.new(-1, 0, 1).Unit, Vector3.new(-1, 0, -1).Unit,
+    }
+
+    local best, bestScore
+    for _, dir in ipairs(dirs) do
+        local wanted = base + dir * radius
+        local ground = groundAt(wanted.X, wanted.Z, { getCharacter(), trunk })
+        if ground and math.abs(ground.Y - base.Y) <= 8 then
+            local stand = Vector3.new(wanted.X, ground.Y + 2.8, wanted.Z)
+            if hasHeadClearance(stand) then
+                local score = flatDistance(root.Position, stand)
+                if not bestScore or score < bestScore then
+                    best = stand
+                    bestScore = score
+                end
+            end
+        end
+    end
+
+    if best then
+        return best
+    end
+
     local away = root.Position - base
     away = Vector3.new(away.X, 0, away.Z)
     if away.Magnitude < 1 then
         away = Vector3.new(1, 0, 0)
     end
-
-    return base + away.Unit * math.max(4.5, math.min(7, (trunk.Size.X + trunk.Size.Z) * 0.25))
+    return base + away.Unit * radius
 end
 
 local function getNearestTree(exclude, forceRefresh)
-    local trees = TreeScanner.GetClusters(25, forceRefresh)
+    local trees = TreeScanner.GetClusters(40, forceRefresh)
     local root = getRoot()
     local bestTree
     local bestDistance = math.huge
@@ -248,8 +282,6 @@ local function getNearestTree(exclude, forceRefresh)
                     bestDistance = d
                     bestTree = tree
                 end
-            elseif not bestTree then
-                bestTree = tree
             end
         end
     end
@@ -361,7 +393,7 @@ local function computePath(toPosition)
         AgentHeight = 5,
         AgentCanJump = true,
         AgentCanClimb = true,
-        WaypointSpacing = 6,
+        WaypointSpacing = 8,
     })
 
     local ok = pcall(function()
@@ -375,31 +407,41 @@ local function computePath(toPosition)
     return nil
 end
 
-local function shouldJumpForStep(root)
-    local humanoid = getHumanoid()
+local function grounded(humanoid)
     if not humanoid then
         return false
     end
-
     local state = humanoid:GetState()
-    if state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Jumping then
+    return state ~= Enum.HumanoidStateType.Freefall and state ~= Enum.HumanoidStateType.Jumping
+end
+
+local function jumpIfStuck(state, humanoid)
+    if not humanoid or not grounded(humanoid) then
+        return
+    end
+    if os.clock() - (state.LastJump or 0) < 1.1 then
+        return
+    end
+    state.LastJump = os.clock()
+    humanoid.Jump = true
+end
+
+local function maybeStuck(state, root)
+    if os.clock() - (state.LastStuckCheck or 0) < 0.45 then
         return false
     end
 
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = { getCharacter() }
-    params.FilterType = Enum.RaycastFilterType.Exclude
+    local moved = (root.Position - (state.LastPos or root.Position)).Magnitude
+    state.LastPos = root.Position
+    state.LastStuckCheck = os.clock()
 
-    local forward = root.CFrame.LookVector
-    local lowOrigin = root.Position + Vector3.new(0, -1.4, 0)
-    local lowHit = Workspace:Raycast(lowOrigin, forward * 3, params)
-    if not lowHit then
-        return false
+    if moved < 0.55 then
+        state.StuckCount = (state.StuckCount or 0) + 1
+    else
+        state.StuckCount = 0
     end
 
-    local highOrigin = root.Position + Vector3.new(0, 2.4, 0)
-    local highHit = Workspace:Raycast(highOrigin, forward * 3, params)
-    return highHit == nil
+    return (state.StuckCount or 0) >= 3
 end
 
 local function movementTick(state)
@@ -416,10 +458,10 @@ local function movementTick(state)
         state.Tree = getNearestTree(nil, true)
         state.NextScanTime = os.clock() + 1.0
         state.Waypoints = nil
-        state.Index = 1
+        state.Index = 2
         state.LastPathTime = 0
         state.LastPos = root.Position
-        state.StuckSince = os.clock()
+        state.StuckCount = 0
     end
 
     local tree = state.Tree
@@ -434,10 +476,11 @@ local function movementTick(state)
         return
     end
 
+    local trunkBaseY = trunk.Position.Y - trunk.Size.Y / 2 + 2.5
     local flatToTrunk = flatDistance(root.Position, trunk.Position)
-    local yDiff = math.abs(root.Position.Y - (trunk.Position.Y - trunk.Size.Y / 2 + 2.5))
+    local yDiff = math.abs(root.Position.Y - trunkBaseY)
 
-    if flatToTrunk <= 8 and yDiff <= 8 then
+    if flatToTrunk <= 9 and yDiff <= 7 then
         humanoid:Move(Vector3.zero, false)
         faceTree(tree)
         if os.clock() - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
@@ -447,55 +490,41 @@ local function movementTick(state)
         return
     end
 
-    if not state.Waypoints or not state.Waypoints[state.Index] or os.clock() - (state.LastPathTime or 0) > 4 then
-        state.Waypoints = computePath(stand)
-        state.Index = 2
-        state.LastPathTime = os.clock()
+    local directFlat = flatDistance(root.Position, stand)
+    if directFlat <= 18 and math.abs(root.Position.Y - stand.Y) <= 8 then
+        humanoid:MoveTo(stand)
+    else
+        if not state.Waypoints or not state.Waypoints[state.Index] or os.clock() - (state.LastPathTime or 0) > 6 then
+            state.Waypoints = computePath(stand)
+            state.Index = 2
+            state.LastPathTime = os.clock()
 
-        if not state.Waypoints then
-            if os.clock() - DemoWorld.LastPathWarn > 4 then
-                DemoWorld.LastPathWarn = os.clock()
-                toast("Can't pathfind to nearest tree, trying another.", "warn")
+            if not state.Waypoints then
+                -- Fall back to normal MoveTo instead of doing nothing. Roblox pathfinding often fails on this block world.
+                humanoid:MoveTo(stand)
             end
-            state.Tree = nil
-            state.NextScanTime = os.clock() + 1.0
-            return
         end
-    end
 
-    local waypoint = state.Waypoints[state.Index]
-    if not waypoint then
-        state.Waypoints = nil
-        return
-    end
-
-    local target = waypoint.Position
-    local flatToWaypoint = flatDistance(root.Position, target)
-    if flatToWaypoint < 3.5 then
-        state.Index += 1
-        return
-    end
-
-    humanoid:MoveTo(target)
-
-    if waypoint.Action == Enum.PathWaypointAction.Jump and os.clock() - (state.LastJump or 0) > 0.8 then
-        state.LastJump = os.clock()
-        humanoid.Jump = true
-    end
-
-    if os.clock() - (state.LastStuckCheck or 0) > 0.5 then
-        local moved = (root.Position - (state.LastPos or root.Position)).Magnitude
-        if moved < 0.8 then
-            if os.clock() - (state.StuckSince or os.clock()) > 1.25 then
-                state.Waypoints = nil
-                state.LastPathTime = 0
-                state.StuckSince = os.clock()
+        if state.Waypoints and state.Waypoints[state.Index] then
+            local waypoint = state.Waypoints[state.Index]
+            local target = waypoint.Position
+            if flatDistance(root.Position, target) < 4.0 then
+                state.Index += 1
+            else
+                humanoid:MoveTo(target)
+                if waypoint.Action == Enum.PathWaypointAction.Jump then
+                    jumpIfStuck(state, humanoid)
+                end
             end
         else
-            state.StuckSince = os.clock()
+            humanoid:MoveTo(stand)
         end
-        state.LastPos = root.Position
-        state.LastStuckCheck = os.clock()
+    end
+
+    if maybeStuck(state, root) then
+        jumpIfStuck(state, humanoid)
+        state.Waypoints = nil
+        state.LastPathTime = 0
     end
 end
 
@@ -535,38 +564,8 @@ function DemoWorld.SetOverlayDemo(rootGui, enabled)
         end
     end
     table.clear(DemoWorld.OverlayItems)
-
-    if not enabled then
-        return
-    end
-
-    local parent = rootGui or Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    for index, tree in ipairs(TreeScanner.GetClusters(25)) do
-        local marker = makeTreePoint(tree, index)
-        marker.Transparency = 1
-
-        local billboard = Instance.new("BillboardGui")
-        billboard.Name = "IceylandsTreeMarker"
-        billboard.Adornee = marker
-        billboard.AlwaysOnTop = true
-        billboard.Size = UDim2.fromOffset(160, 34)
-        billboard.StudsOffset = Vector3.new(0, 3, 0)
-        billboard.Parent = parent
-
-        local label = Instance.new("TextLabel")
-        label.BackgroundColor3 = Color3.fromRGB(20, 38, 60)
-        label.BackgroundTransparency = 0.18
-        label.Size = UDim2.fromScale(1, 1)
-        label.Font = Enum.Font.GothamBold
-        label.TextSize = 12
-        label.TextColor3 = Color3.fromRGB(242, 248, 255)
-        label.Text = string.format("%s • %.0f studs", tree.Name or "Tree", tree.Distance or 0)
-        label.Parent = billboard
-        Instance.new("UICorner", label).CornerRadius = UDim.new(0, 6)
-
-        table.insert(DemoWorld.OverlayItems, billboard)
-        table.insert(DemoWorld.OverlayItems, marker)
-    end
+    -- Overlay is intentionally disabled for now. The previous physical markers
+    -- could intercept clicks and caused UpdateIconTree timeouts in the game UI.
 end
 
 local function teleportBesideTree(tree)
