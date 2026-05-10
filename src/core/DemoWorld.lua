@@ -371,33 +371,62 @@ local function getTreeScreenPoint(tree)
     return screenPos.X, screenPos.Y, true
 end
 
+local function aimCameraAtTree(tree)
+    local camera = Workspace.CurrentCamera
+    local point = getTreeAimPoint(tree)
+    local root = getRoot()
+    if not camera or not point then
+        return
+    end
+
+    -- Aim at the lower trunk only. This does not use the user's mouse pointer,
+    -- and it avoids looking at leaves/sky so clicks do not land on crops/ground/UI.
+    if root then
+        point = Vector3.new(point.X, math.clamp(point.Y, root.Position.Y + 1.5, root.Position.Y + 4.5), point.Z)
+    end
+
+    pcall(function()
+        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, point)
+    end)
+end
+
 local function pressLeftClick(tree)
+    -- The axe tool still depends on the camera ray in this game, so aim the camera
+    -- at the trunk then click the computed trunk screen position, never the real cursor.
+    aimCameraAtTree(tree)
+    task.wait()
+
     local x, y, visible = getTreeScreenPoint(tree)
     if not visible then
-        -- Never click the current mouse/center as a fallback. If the trunk is not visible, only Tool:Activate is used.
         return false
     end
 
-    -- Safety check: only send a virtual click if that exact screen point raycasts into this tree's trunk/wood.
-    -- This prevents clicking wheat, seeds, UI, ground, or whatever the user's cursor is over.
+    -- Only click when that exact screen ray hits this tree. This prevents random clicks
+    -- on wheat, seeds, blocks under the player, or the UI toggle.
     if not screenPointHitsTree(tree, x, y) then
         return false
     end
 
     local pos = Vector2.new(x, y)
 
+    if VirtualUser then
+        pcall(function()
+            VirtualUser:Button1Down(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
+            task.wait(0.045)
+            VirtualUser:Button1Up(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
+        end)
+    end
+
     if VirtualInputManager then
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.035)
+            task.wait(0.045)
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
         end)
-    elseif VirtualUser then
-        pcall(function()
-            VirtualUser:Button1Down(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
-            task.wait(0.035)
-            VirtualUser:Button1Up(pos, Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame or CFrame.new())
-        end)
+    end
+
+    if type(mouse1click) == "function" then
+        pcall(mouse1click)
     end
 
     return true
@@ -419,8 +448,8 @@ function DemoWorld.ActivateHeldAxe(tree)
         return false
     end
 
-    -- Face the trunk, activate the held axe, then click only if the tree trunk is the verified screen target.
-    -- No camera forcing and no current-mouse fallback, so crops/UI/ground cannot be clicked accidentally.
+    -- Face the trunk, activate the held axe, then click the verified trunk screen point.
+    -- This never uses the user's current cursor, so crops/UI/ground cannot be clicked accidentally.
     faceTree(tree)
 
     pcall(function()
