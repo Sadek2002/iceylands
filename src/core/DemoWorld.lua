@@ -15,6 +15,9 @@ local AxePriority = {
     voidMattock = 7,
 }
 
+local removeDemoAxe
+local getLiveTreeForMarker
+
 local DemoWorld = {
     FolderName = "IceylandsDemo",
     MovementConnection = nil,
@@ -25,7 +28,32 @@ local DemoWorld = {
     LastTreeClick = 0,
     CurrentMoveTarget = nil,
     MoveToIssuedAt = 0,
+    TargetSearchInterval = 0.6,
+    LastTargetSearch = 0,
+    EquipIssuedAt = 0,
 }
+
+local function isLiveTarget(target)
+    if not target or not target.Parent or target:GetAttribute("Collected") then
+        return false
+    end
+
+    local sourcePath = target:GetAttribute("SourceTreePath")
+    if sourcePath and sourcePath ~= "" then
+        return getLiveTreeForMarker(target) ~= nil
+    end
+
+    local hitsRemaining = target:GetAttribute("HitsRemaining")
+    return hitsRemaining == nil or hitsRemaining > 0
+end
+
+local function equipBestAxeThrottled(force)
+    if force or os.clock() - DemoWorld.EquipIssuedAt >= 1.0 then
+        DemoWorld.EquipIssuedAt = os.clock()
+        removeDemoAxe()
+        DemoWorld.EquipBestAxe()
+    end
+end
 
 local function getCharacter()
     local player = Players.LocalPlayer
@@ -42,7 +70,7 @@ local function getHumanoid()
     return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-local function removeDemoAxe()
+function removeDemoAxe()
     local player = Players.LocalPlayer
     local character = player and player.Character
     local backpack = player and player:FindFirstChild("Backpack")
@@ -137,7 +165,7 @@ local function getInstancePosition(instance)
     return part and part.Position or nil
 end
 
-local function getLiveTreeForMarker(marker)
+function getLiveTreeForMarker(marker)
     if not marker then
         return nil
     end
@@ -424,7 +452,7 @@ local function damageDemoTree(target, onCollect)
     local sourceTree = getLiveTreeForMarker(target)
     local clickTarget = getTargetPart(sourceTree) or getTargetPart(target) or sourceTree or target
 
-    DemoWorld.EquipBestAxe()
+    equipBestAxeThrottled(false)
     pressLeftClick(clickTarget)
     DemoWorld.ActivateHeldAxe(clickTarget)
 
@@ -542,45 +570,90 @@ function DemoWorld.SetMovementDemo(enabled)
         return
     end
 
-    removeDemoAxe()
+    DemoWorld.CurrentMoveTarget = nil
+    DemoWorld.LastTargetSearch = 0
+    DemoWorld.MoveToIssuedAt = 0
+    equipBestAxeThrottled(true)
     DemoWorld.SpawnObjectsAtTreePositions(10)
-    DemoWorld.EquipBestAxe()
 
-    DemoWorld.MovementConnection = RunService.RenderStepped:Connect(function(deltaTime)
-        removeDemoAxe()
-        DemoWorld.EquipBestAxe()
-
+    -- Optimised movement mode:
+    -- 1) Pick the nearest live tree once.
+    -- 2) Stay locked to that target until it disappears/breaks, even if a closer tree spawns.
+    -- 3) Only rescan after the locked target is gone, instead of scanning every frame.
+    -- 4) Once in axe range, stop walking and only swing/click.
+    DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function(deltaTime)
+        local now = os.clock()
         local root = getRoot()
-        local target = DemoWorld.GetNearestCollectible()
-        local targetPosition = getTreePosition(target)
-
-        if not root or not target or not targetPosition then
+        if not root then
             return
         end
 
-        local offset = targetPosition - root.Position
+        local target = DemoWorld.CurrentMoveTarget
+        if not isLiveTarget(target) then
+            DemoWorld.CurrentMoveTarget = nil
+            target = nil
+
+            if now - DemoWorld.LastTargetSearch < DemoWorld.TargetSearchInterval then
+                return
+            end
+
+            DemoWorld.LastTargetSearch = now
+            DemoWorld.SpawnObjectsAtTreePositions(10)
+            target = DemoWorld.GetNearestCollectible()
+            if not isLiveTarget(target) then
+                return
+            end
+
+            DemoWorld.CurrentMoveTarget = target
+            DemoWorld.MoveToIssuedAt = 0
+            equipBestAxeThrottled(true)
+        else
+            equipBestAxeThrottled(false)
+        end
+
+        local targetPosition = getTreePosition(target)
+        if not targetPosition then
+            DemoWorld.CurrentMoveTarget = nil
+            return
+        end
+
         local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(targetPosition.X, 0, targetPosition.Z)).Magnitude
 
         if flatDistance <= 7 then
-            root.CFrame = CFrame.new(root.Position, targetPosition)
+            local humanoid = getHumanoid()
+            if humanoid then
+                humanoid:Move(Vector3.zero, false)
+            end
+
+            root.CFrame = CFrame.new(root.Position, Vector3.new(targetPosition.X, root.Position.Y, targetPosition.Z))
             if Workspace.CurrentCamera then
                 Workspace.CurrentCamera.CFrame = CFrame.new(Workspace.CurrentCamera.CFrame.Position, targetPosition)
             end
 
-            if os.clock() - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
-                DemoWorld.LastTreeClick = os.clock()
+            if now - DemoWorld.LastTreeClick >= DemoWorld.ClickInterval then
+                DemoWorld.LastTreeClick = now
                 damageDemoTree(target)
             end
             return
         end
 
-        -- Keep the original smooth movement behavior instead of toggling itself off or
-        -- relying on Humanoid:MoveTo getting stuck.
-        local step = math.min(flatDistance, 18 * math.max(deltaTime, 1 / 60))
-        local direction = Vector3.new(offset.X, 0, offset.Z)
-        if direction.Magnitude > 0 then
-            local nextPosition = root.Position + direction.Unit * step
-            root.CFrame = CFrame.new(nextPosition, Vector3.new(targetPosition.X, nextPosition.Y, targetPosition.Z))
+        -- Walk toward the locked tree, but only issue movement every ~0.6s to avoid jitter/lag.
+        if now - DemoWorld.MoveToIssuedAt >= 0.6 then
+            DemoWorld.MoveToIssuedAt = now
+            local humanoid = getHumanoid()
+            local direction = Vector3.new(targetPosition.X - root.Position.X, 0, targetPosition.Z - root.Position.Z)
+            local stopPosition = targetPosition
+            if direction.Magnitude > 7 then
+                stopPosition = targetPosition - direction.Unit * 5
+            end
+
+            if humanoid then
+                humanoid:MoveTo(stopPosition)
+            else
+                local step = math.min(flatDistance, 18 * math.max(deltaTime, 1 / 60))
+                local nextPosition = root.Position + direction.Unit * step
+                root.CFrame = CFrame.new(nextPosition, Vector3.new(targetPosition.X, nextPosition.Y, targetPosition.Z))
+            end
         end
     end)
 end
