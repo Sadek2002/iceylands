@@ -1,7 +1,6 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
@@ -23,7 +22,7 @@ local DemoWorld = {
     MoveToInterval = 0.75,
     StandDistance = 5,
     ChopRange = 8,
-    ChopInterval = 0.45,
+    ChopInterval = 1 / 3, -- 3 CPS
     LastChop = 0,
 }
 
@@ -144,6 +143,78 @@ local function faceTrunk(root, trunk)
     end
 end
 
+local function getAxeHandle(tool)
+    if not tool then
+        return nil
+    end
+
+    local handle = tool:FindFirstChild("Handle")
+    if handle and handle:IsA("BasePart") then
+        return handle
+    end
+
+    return tool:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function getTrimRemote()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local ok, remote = pcall(function()
+        return replicatedStorage.rbxts_include.node_modules["@rbxts"].net.out._NetManaged.CLIENT_TRIM_TREE_REQUEST
+    end)
+
+    if ok then
+        return remote
+    end
+
+    return nil
+end
+
+local function tryTouchHit(tool, trunk)
+    local handle = getAxeHandle(tool)
+    if not handle or not trunk then
+        return false
+    end
+
+    if typeof(firetouchinterest) ~= "function" then
+        return false
+    end
+
+    pcall(function()
+        firetouchinterest(handle, trunk, 0)
+        task.wait(0.02)
+        firetouchinterest(handle, trunk, 1)
+    end)
+
+    return true
+end
+
+local function tryTrimRemote(tree)
+    local remote = getTrimRemote()
+    local trunk = tree and tree.Trunk
+    local container = tree and tree.Container
+    if not remote or not trunk or not container then
+        return false
+    end
+
+    pcall(function()
+        remote:InvokeServer(trunk)
+    end)
+
+    pcall(function()
+        remote:InvokeServer(container)
+    end)
+
+    pcall(function()
+        remote:InvokeServer({
+            tree = container,
+            part = trunk,
+            trunk = trunk,
+        })
+    end)
+
+    return true
+end
+
 local function clickTrunk(tree)
     local character = getCharacter()
     local root = getRoot()
@@ -159,28 +230,20 @@ local function clickTrunk(tree)
         return false
     end
 
+    -- Face the trunk horizontally so normal Tool:Activate logic has the best chance to hit.
+    -- This does not move the camera or use the user's real mouse cursor.
     faceTrunk(root, trunk)
 
-    local aimPosition = getTrunkAimPosition(trunk)
-    local camera = Workspace.CurrentCamera
-
-    -- First activate the equipped axe directly. This is safe and does not depend on the user's cursor.
+    -- Background-safe chop attempt:
+    -- 1) Activate the equipped axe.
+    -- 2) Simulate axe-handle contact with the trunk when supported by the executor.
+    -- 3) Also try the known tree trim remote as a fallback.
     pcall(function()
         tool:Activate()
     end)
 
-    -- Then send a virtual click to the projected trunk center if it is on-screen.
-    -- This targets the tree location, not the user's current mouse position.
-    if camera then
-        local screenPoint, onScreen = camera:WorldToViewportPoint(aimPosition)
-        if onScreen and screenPoint.Z > 0 then
-            pcall(function()
-                VirtualInputManager:SendMouseButtonEvent(screenPoint.X, screenPoint.Y, 0, true, game, 0)
-                task.wait(0.03)
-                VirtualInputManager:SendMouseButtonEvent(screenPoint.X, screenPoint.Y, 0, false, game, 0)
-            end)
-        end
-    end
+    tryTouchHit(tool, trunk)
+    tryTrimRemote(tree)
 
     return true
 end

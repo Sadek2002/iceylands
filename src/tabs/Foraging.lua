@@ -3,6 +3,7 @@ local Components = Runtime.LoadModule("src/ui/Components.lua")
 local DemoWorld = Runtime.LoadModule("src/core/DemoWorld.lua")
 
 local Foraging = {}
+local FORAGING_VERSION = "v44"
 
 local function updateUiClickGuard(services)
     if getgenv then
@@ -22,7 +23,7 @@ function Foraging.Mount(parent, services)
         end
 
         DemoWorld.SetMovementDemo(value)
-        services.Toasts:Push(value and "Tree movement enabled" or "Tree movement disabled", "success")
+        services.Toasts:Push((value and "Tree movement enabled" or "Tree movement disabled") .. " • Foraging " .. FORAGING_VERSION, "success")
     end)
 end
 
