@@ -20,43 +20,12 @@ local TreeNames = {
     ["Spirit Tree"] = true,
 }
 
-local IgnoreNames = {
-    IceylandsDemo = true,
-}
-
 local function getRoot()
     local character = Players.LocalPlayer and Players.LocalPlayer.Character
     return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-local function isIgnored(item)
-    local player = Players.LocalPlayer
-    local character = player and player.Character
-    if character and item:IsDescendantOf(character) then
-        return true
-    end
-
-    local backpack = player and player:FindFirstChild("Backpack")
-    if backpack and item:IsDescendantOf(backpack) then
-        return true
-    end
-
-    local current = item
-    while current do
-        if IgnoreNames[current.Name] then
-            return true
-        end
-        current = current.Parent
-    end
-
-    return false
-end
-
 local function isTreeCandidate(item)
-    if isIgnored(item) then
-        return false
-    end
-
     if TreeNames[item.Name] then
         return true
     end
@@ -79,41 +48,16 @@ local function getPosition(item)
     end
 
     if item:IsA("Model") then
-        local trunk
-        local firstPart
-        for _, part in ipairs(item:GetDescendants()) do
-            if part:IsA("BasePart") then
-                firstPart = firstPart or part
-                local name = string.lower(part.Name)
-                if string.find(name, "trunk", 1, true) or string.find(name, "log", 1, true) or string.find(name, "wood", 1, true) then
-                    trunk = part
-                    break
-                end
-            end
-        end
-
-        if trunk then
-            return trunk.Position
-        end
-
-        if firstPart then
-            return firstPart.Position
-        end
-
         local ok, pivot = pcall(function()
             return item:GetPivot()
         end)
 
-        if ok and pivot then
+        if ok then
             return pivot.Position
         end
     end
 
     return nil
-end
-
-local function flatDistance(a, b)
-    return (Vector3.new(a.X, 0, a.Z) - Vector3.new(b.X, 0, b.Z)).Magnitude
 end
 
 function TreeScanner.GetClusters(maxClusters)
@@ -129,7 +73,7 @@ function TreeScanner.GetClusters(maxClusters)
                     ClassName = item.ClassName,
                     Path = item:GetFullName(),
                     Position = position,
-                    Distance = root and flatDistance(root.Position, position) or 0,
+                    Distance = root and (root.Position - position).Magnitude or 0,
                 })
             end
         end
@@ -140,22 +84,20 @@ function TreeScanner.GetClusters(maxClusters)
     end)
 
     local clusters = {}
-    local clusterRadius = 10
+    local clusterRadius = 16
 
     for _, candidate in ipairs(candidates) do
         local assigned = false
 
         for _, cluster in ipairs(clusters) do
-            if flatDistance(candidate.Position, cluster.Center) <= clusterRadius then
+            local flatCandidate = Vector3.new(candidate.Position.X, 0, candidate.Position.Z)
+            local flatCluster = Vector3.new(cluster.Center.X, 0, cluster.Center.Z)
+
+            if (flatCandidate - flatCluster).Magnitude <= clusterRadius then
                 cluster.Count += 1
                 cluster.Sum += candidate.Position
                 cluster.Center = cluster.Sum / cluster.Count
                 cluster.MinY = math.min(cluster.MinY, candidate.Position.Y)
-                if candidate.Distance < cluster.Distance then
-                    cluster.Distance = candidate.Distance
-                    cluster.PrimaryPath = candidate.Path
-                    cluster.PrimaryName = candidate.Name
-                end
                 table.insert(cluster.RawNames, candidate.Name)
                 table.insert(cluster.Paths, candidate.Path)
                 assigned = true
@@ -170,8 +112,6 @@ function TreeScanner.GetClusters(maxClusters)
                 Center = candidate.Position,
                 MinY = candidate.Position.Y,
                 Distance = candidate.Distance,
-                PrimaryPath = candidate.Path,
-                PrimaryName = candidate.Name,
                 RawNames = { candidate.Name },
                 Paths = { candidate.Path },
             })
@@ -181,12 +121,12 @@ function TreeScanner.GetClusters(maxClusters)
     local results = {}
     for index, cluster in ipairs(clusters) do
         local position = Vector3.new(cluster.Center.X, cluster.MinY + 0.75, cluster.Center.Z)
-        local distance = root and flatDistance(root.Position, position) or cluster.Distance
+        local distance = root and (root.Position - position).Magnitude or cluster.Distance
 
         table.insert(results, {
-            Name = cluster.PrimaryName or ("Tree Cluster " .. index),
+            Name = "Tree Cluster " .. index,
             RawName = table.concat(cluster.RawNames, ", "),
-            Path = cluster.PrimaryPath or cluster.Paths[1],
+            Path = cluster.Paths[1],
             PartCount = cluster.Count,
             Position = position,
             Distance = distance and math.floor(distance * 10 + 0.5) / 10 or nil,
