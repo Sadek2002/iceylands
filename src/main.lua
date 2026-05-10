@@ -8,6 +8,7 @@ local Window = Runtime.LoadModule("src/ui/Window.lua")
 local Notifications = Runtime.LoadModule("src/core/Notifications.lua")
 local Performance = Runtime.LoadModule("src/core/Performance.lua")
 local GeneralTab = Runtime.LoadModule("src/tabs/General.lua")
+local ForagingTab = Runtime.LoadModule("src/tabs/Foraging.lua")
 local SettingsTab = Runtime.LoadModule("src/tabs/Settings.lua")
 
 local Main = {}
@@ -214,7 +215,13 @@ function Main.Start()
     end)
 
     app:AddTab("Combat", "Lock", function() end)
-    app:AddTab("Foraging", "Lock", function() end)
+    app:AddTab("Foraging", "Foraging", function(container)
+        ForagingTab.Mount(container, {
+            Config = Config,
+            State = state,
+            Toasts = toasts,
+        })
+    end)
     app:AddTab("Settings", "Settings", function(container)
         SettingsTab.Mount(container, {
             Config = Config,

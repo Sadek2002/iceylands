@@ -3,6 +3,7 @@
 Iceylands is a modular Roblox client UI foundation with a frosty translucent interface, loading animation, draggable window, minimized snowflake button, and JSON config support.
 
 This first version contains UI, harmless placeholder controls, a Settings tab, config actions, and local performance toggles.
+The Foraging tab is a read-only audit/demo panel for showcasing UI architecture and client-visible data summaries.
 
 ## Loader
 
@@ -45,3 +46,12 @@ The Settings tab currently includes:
 - Load Config
 - Export Config
 - Kill Script
+
+## Foraging Demo
+
+The Foraging tab includes:
+
+- Best visible axe summary
+- Known tree model scan
+- Nearest tree distance list
+- Read-only audit JSON export

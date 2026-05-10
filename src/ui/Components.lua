@@ -228,6 +228,38 @@ function Components.Button(parent, title, description, buttonText, callback)
     return card
 end
 
+function Components.TextBlock(parent, title, body, height)
+    local card = Components.Card(parent, height or 118)
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Position = UDim2.fromOffset(14, 12)
+    titleLabel.Size = UDim2.new(1, -28, 0, 20)
+    titleLabel.Font = Theme.FontBold
+    titleLabel.TextSize = 14
+    titleLabel.TextColor3 = Theme.Colors.Text
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    titleLabel.Text = title
+    titleLabel.Parent = card
+
+    local bodyLabel = Instance.new("TextLabel")
+    bodyLabel.BackgroundTransparency = 1
+    bodyLabel.Position = UDim2.fromOffset(14, 40)
+    bodyLabel.Size = UDim2.new(1, -28, 1, -52)
+    bodyLabel.Font = Theme.Font
+    bodyLabel.TextSize = 12
+    bodyLabel.TextColor3 = Theme.Colors.Muted
+    bodyLabel.TextXAlignment = Enum.TextXAlignment.Left
+    bodyLabel.TextYAlignment = Enum.TextYAlignment.Top
+    bodyLabel.TextWrapped = true
+    bodyLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    bodyLabel.Text = body
+    bodyLabel.Parent = card
+
+    return card, bodyLabel
+end
+
 function Components.Keybind(parent, title, description, initial, callback, captureChanged)
     local card = Components.Card(parent, 84)
     local current = initial or "RightShift"
