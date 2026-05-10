@@ -32,27 +32,31 @@ function Components.Card(parent, height)
 end
 
 function Components.Toggle(parent, title, description, initial, callback)
-    local card = Components.Card(parent, 74)
+    local card = Components.Card(parent, 82)
 
     local titleLabel = Instance.new("TextLabel")
     titleLabel.BackgroundTransparency = 1
     titleLabel.Position = UDim2.fromOffset(14, 12)
-    titleLabel.Size = UDim2.new(1, -92, 0, 20)
+    titleLabel.Size = UDim2.new(1, -126, 0, 20)
     titleLabel.Font = Theme.FontBold
     titleLabel.TextSize = 14
     titleLabel.TextColor3 = Theme.Colors.Text
     titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
     titleLabel.Text = title
     titleLabel.Parent = card
 
     local desc = Instance.new("TextLabel")
     desc.BackgroundTransparency = 1
     desc.Position = UDim2.fromOffset(14, 36)
-    desc.Size = UDim2.new(1, -92, 0, 18)
+    desc.Size = UDim2.new(1, -126, 0, 34)
     desc.Font = Theme.Font
     desc.TextSize = 12
     desc.TextColor3 = Theme.Colors.Muted
     desc.TextXAlignment = Enum.TextXAlignment.Left
+    desc.TextYAlignment = Enum.TextYAlignment.Top
+    desc.TextWrapped = true
+    desc.TextTruncate = Enum.TextTruncate.AtEnd
     desc.Text = description
     desc.Parent = card
 
@@ -179,27 +183,31 @@ function Components.Slider(parent, title, description, min, max, initial, callba
 end
 
 function Components.Button(parent, title, description, buttonText, callback)
-    local card = Components.Card(parent, 76)
+    local card = Components.Card(parent, 84)
 
     local titleLabel = Instance.new("TextLabel")
     titleLabel.BackgroundTransparency = 1
     titleLabel.Position = UDim2.fromOffset(14, 13)
-    titleLabel.Size = UDim2.new(1, -142, 0, 20)
+    titleLabel.Size = UDim2.new(1, -166, 0, 20)
     titleLabel.Font = Theme.FontBold
     titleLabel.TextSize = 14
     titleLabel.TextColor3 = Theme.Colors.Text
     titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
     titleLabel.Text = title
     titleLabel.Parent = card
 
     local desc = Instance.new("TextLabel")
     desc.BackgroundTransparency = 1
     desc.Position = UDim2.fromOffset(14, 38)
-    desc.Size = UDim2.new(1, -142, 0, 18)
+    desc.Size = UDim2.new(1, -166, 0, 34)
     desc.Font = Theme.Font
     desc.TextSize = 12
     desc.TextColor3 = Theme.Colors.Muted
     desc.TextXAlignment = Enum.TextXAlignment.Left
+    desc.TextYAlignment = Enum.TextYAlignment.Top
+    desc.TextWrapped = true
+    desc.TextTruncate = Enum.TextTruncate.AtEnd
     desc.Text = description
     desc.Parent = card
 
@@ -221,7 +229,7 @@ function Components.Button(parent, title, description, buttonText, callback)
 end
 
 function Components.Keybind(parent, title, description, initial, callback, captureChanged)
-    local card = Components.Card(parent, 76)
+    local card = Components.Card(parent, 84)
     local current = initial or "RightShift"
     local waiting = false
     local captureConnection
@@ -229,22 +237,26 @@ function Components.Keybind(parent, title, description, initial, callback, captu
     local titleLabel = Instance.new("TextLabel")
     titleLabel.BackgroundTransparency = 1
     titleLabel.Position = UDim2.fromOffset(14, 13)
-    titleLabel.Size = UDim2.new(1, -142, 0, 20)
+    titleLabel.Size = UDim2.new(1, -180, 0, 20)
     titleLabel.Font = Theme.FontBold
     titleLabel.TextSize = 14
     titleLabel.TextColor3 = Theme.Colors.Text
     titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
     titleLabel.Text = title
     titleLabel.Parent = card
 
     local desc = Instance.new("TextLabel")
     desc.BackgroundTransparency = 1
     desc.Position = UDim2.fromOffset(14, 38)
-    desc.Size = UDim2.new(1, -142, 0, 18)
+    desc.Size = UDim2.new(1, -180, 0, 34)
     desc.Font = Theme.Font
     desc.TextSize = 12
     desc.TextColor3 = Theme.Colors.Muted
     desc.TextXAlignment = Enum.TextXAlignment.Left
+    desc.TextYAlignment = Enum.TextYAlignment.Top
+    desc.TextWrapped = true
+    desc.TextTruncate = Enum.TextTruncate.AtEnd
     desc.Text = description
     desc.Parent = card
 
