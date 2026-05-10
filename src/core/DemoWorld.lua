@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local PathfindingService = game:GetService("PathfindingService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
@@ -27,6 +28,12 @@ local DemoWorld = {
     ClickInterval = 0.22,
     LastTreeClick = 0,
     CurrentMoveTarget = nil,
+    CurrentPath = nil,
+    CurrentWaypoints = nil,
+    CurrentWaypointIndex = 1,
+    CurrentPathTarget = nil,
+    LastRootPosition = nil,
+    LastStuckCheck = 0,
     MoveToIssuedAt = 0,
     TargetSearchInterval = 0.6,
     LastTargetSearch = 0,
@@ -559,6 +566,149 @@ function DemoWorld.GetNearestCollectible()
     return nearest, nearestDistance
 end
 
+
+local function clearMovementPath()
+    DemoWorld.CurrentPath = nil
+    DemoWorld.CurrentWaypoints = nil
+    DemoWorld.CurrentWaypointIndex = 1
+    DemoWorld.CurrentPathTarget = nil
+    DemoWorld.LastRootPosition = nil
+    DemoWorld.LastStuckCheck = 0
+end
+
+local function hasGroundBelow(position)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local character = getCharacter()
+    params.FilterDescendantsInstances = character and { character } or {}
+
+    local result = Workspace:Raycast(position + Vector3.new(0, 4, 0), Vector3.new(0, -14, 0), params)
+    return result ~= nil
+end
+
+local function getStandPosition(rootPosition, targetPosition)
+    local away = Vector3.new(rootPosition.X - targetPosition.X, 0, rootPosition.Z - targetPosition.Z)
+    if away.Magnitude < 0.1 then
+        away = Vector3.new(1, 0, 0)
+    end
+
+    local candidates = {
+        targetPosition + away.Unit * 5,
+        targetPosition + Vector3.new(5, 0, 0),
+        targetPosition + Vector3.new(-5, 0, 0),
+        targetPosition + Vector3.new(0, 0, 5),
+        targetPosition + Vector3.new(0, 0, -5),
+    }
+
+    for _, candidate in ipairs(candidates) do
+        local stand = Vector3.new(candidate.X, rootPosition.Y, candidate.Z)
+        if hasGroundBelow(stand) then
+            return stand
+        end
+    end
+
+    return Vector3.new(candidates[1].X, rootPosition.Y, candidates[1].Z)
+end
+
+local function jumpIfSmallBlockAhead(root, humanoid, targetPosition)
+    if not root or not humanoid then
+        return
+    end
+
+    local direction = Vector3.new(targetPosition.X - root.Position.X, 0, targetPosition.Z - root.Position.Z)
+    if direction.Magnitude < 1 then
+        return
+    end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local character = getCharacter()
+    params.FilterDescendantsInstances = character and { character } or {}
+
+    local forward = direction.Unit * 3
+    local lowHit = Workspace:Raycast(root.Position + Vector3.new(0, -1.5, 0), forward, params)
+    local highHit = Workspace:Raycast(root.Position + Vector3.new(0, 2.5, 0), forward, params)
+
+    if lowHit and not highHit then
+        humanoid.Jump = true
+    end
+end
+
+local function computeMovementPath(root, targetPosition)
+    local standPosition = getStandPosition(root.Position, targetPosition)
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentCanClimb = true,
+        WaypointSpacing = 4,
+    })
+
+    local ok = pcall(function()
+        path:ComputeAsync(root.Position, standPosition)
+    end)
+
+    if ok and path.Status == Enum.PathStatus.Success then
+        DemoWorld.CurrentPath = path
+        DemoWorld.CurrentWaypoints = path:GetWaypoints()
+        DemoWorld.CurrentWaypointIndex = 2
+        DemoWorld.CurrentPathTarget = standPosition
+        return true
+    end
+
+    DemoWorld.CurrentPath = nil
+    DemoWorld.CurrentWaypoints = nil
+    DemoWorld.CurrentWaypointIndex = 1
+    DemoWorld.CurrentPathTarget = standPosition
+    return false
+end
+
+local function followMovementPath(root, humanoid, targetPosition, now)
+    local waypoints = DemoWorld.CurrentWaypoints
+    local index = DemoWorld.CurrentWaypointIndex or 1
+
+    if not waypoints or not waypoints[index] then
+        if now - DemoWorld.MoveToIssuedAt >= 0.45 then
+            DemoWorld.MoveToIssuedAt = now
+            local standPosition = getStandPosition(root.Position, targetPosition)
+            humanoid:MoveTo(standPosition)
+            jumpIfSmallBlockAhead(root, humanoid, standPosition)
+        end
+        return
+    end
+
+    local waypoint = waypoints[index]
+    local waypointPosition = waypoint.Position
+    local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(waypointPosition.X, 0, waypointPosition.Z)).Magnitude
+
+    if flatDistance <= 3 then
+        DemoWorld.CurrentWaypointIndex = index + 1
+        return
+    end
+
+    if waypoint.Action == Enum.PathWaypointAction.Jump then
+        humanoid.Jump = true
+    end
+
+    if now - DemoWorld.MoveToIssuedAt >= 0.35 then
+        DemoWorld.MoveToIssuedAt = now
+        humanoid:MoveTo(waypointPosition)
+        jumpIfSmallBlockAhead(root, humanoid, waypointPosition)
+    end
+
+    if now - DemoWorld.LastStuckCheck >= 1.2 then
+        local last = DemoWorld.LastRootPosition
+        DemoWorld.LastRootPosition = root.Position
+        DemoWorld.LastStuckCheck = now
+
+        if last and (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(last.X, 0, last.Z)).Magnitude < 1.2 then
+            humanoid.Jump = true
+            clearMovementPath()
+            computeMovementPath(root, targetPosition)
+        end
+    end
+end
+
 function DemoWorld.SetMovementDemo(enabled)
     if DemoWorld.MovementConnection then
         DemoWorld.MovementConnection:Disconnect()
@@ -567,20 +717,20 @@ function DemoWorld.SetMovementDemo(enabled)
 
     if not enabled then
         DemoWorld.CurrentMoveTarget = nil
+        clearMovementPath()
         return
     end
 
     DemoWorld.CurrentMoveTarget = nil
     DemoWorld.LastTargetSearch = 0
     DemoWorld.MoveToIssuedAt = 0
+    clearMovementPath()
     equipBestAxeThrottled(true)
-    DemoWorld.SpawnObjectsAtTreePositions(10)
+    DemoWorld.SpawnObjectsAtTreePositions(12)
 
-    -- Optimised movement mode:
-    -- 1) Pick the nearest live tree once.
-    -- 2) Stay locked to that target until it disappears/breaks, even if a closer tree spawns.
-    -- 3) Only rescan after the locked target is gone, instead of scanning every frame.
-    -- 4) Once in axe range, stop walking and only swing/click.
+    -- Movement mode is intentionally target-locked:
+    -- scan once, choose the nearest live tree, path to it, and keep swinging it
+    -- until that same tree disappears. Only then do we scan again.
     DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function(deltaTime)
         local now = os.clock()
         local root = getRoot()
@@ -591,6 +741,7 @@ function DemoWorld.SetMovementDemo(enabled)
         local target = DemoWorld.CurrentMoveTarget
         if not isLiveTarget(target) then
             DemoWorld.CurrentMoveTarget = nil
+            clearMovementPath()
             target = nil
 
             if now - DemoWorld.LastTargetSearch < DemoWorld.TargetSearchInterval then
@@ -598,7 +749,7 @@ function DemoWorld.SetMovementDemo(enabled)
             end
 
             DemoWorld.LastTargetSearch = now
-            DemoWorld.SpawnObjectsAtTreePositions(10)
+            DemoWorld.SpawnObjectsAtTreePositions(12)
             target = DemoWorld.GetNearestCollectible()
             if not isLiveTarget(target) then
                 return
@@ -614,6 +765,7 @@ function DemoWorld.SetMovementDemo(enabled)
         local targetPosition = getTreePosition(target)
         if not targetPosition then
             DemoWorld.CurrentMoveTarget = nil
+            clearMovementPath()
             return
         end
 
@@ -624,6 +776,7 @@ function DemoWorld.SetMovementDemo(enabled)
             if humanoid then
                 humanoid:Move(Vector3.zero, false)
             end
+            clearMovementPath()
 
             root.CFrame = CFrame.new(root.Position, Vector3.new(targetPosition.X, root.Position.Y, targetPosition.Z))
             if Workspace.CurrentCamera then
@@ -637,22 +790,26 @@ function DemoWorld.SetMovementDemo(enabled)
             return
         end
 
-        -- Walk toward the locked tree, but only issue movement every ~0.6s to avoid jitter/lag.
-        if now - DemoWorld.MoveToIssuedAt >= 0.6 then
-            DemoWorld.MoveToIssuedAt = now
-            local humanoid = getHumanoid()
-            local direction = Vector3.new(targetPosition.X - root.Position.X, 0, targetPosition.Z - root.Position.Z)
-            local stopPosition = targetPosition
-            if direction.Magnitude > 7 then
-                stopPosition = targetPosition - direction.Unit * 5
+        local humanoid = getHumanoid()
+        if humanoid then
+            local needsPath = not DemoWorld.CurrentWaypoints or not DemoWorld.CurrentPathTarget
+            if not needsPath and DemoWorld.CurrentPathTarget then
+                needsPath = (DemoWorld.CurrentPathTarget - getStandPosition(root.Position, targetPosition)).Magnitude > 8
             end
 
-            if humanoid then
-                humanoid:MoveTo(stopPosition)
-            else
+            if needsPath then
+                computeMovementPath(root, targetPosition)
+            end
+
+            followMovementPath(root, humanoid, targetPosition, now)
+        else
+            local direction = Vector3.new(targetPosition.X - root.Position.X, 0, targetPosition.Z - root.Position.Z)
+            if direction.Magnitude > 0 then
                 local step = math.min(flatDistance, 18 * math.max(deltaTime, 1 / 60))
                 local nextPosition = root.Position + direction.Unit * step
-                root.CFrame = CFrame.new(nextPosition, Vector3.new(targetPosition.X, nextPosition.Y, targetPosition.Z))
+                if hasGroundBelow(nextPosition) then
+                    root.CFrame = CFrame.new(nextPosition, Vector3.new(targetPosition.X, nextPosition.Y, targetPosition.Z))
+                end
             end
         end
     end)
