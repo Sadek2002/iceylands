@@ -473,6 +473,92 @@ local function jumpIfStuck(state, humanoid)
     humanoid.Jump = true
 end
 
+
+local function getGroundYAt(position, ignore)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = ignore or {}
+
+    local hit = Workspace:Raycast(position + Vector3.new(0, 8, 0), Vector3.new(0, -24, 0), params)
+    if hit and hit.Instance and hit.Instance.CanCollide then
+        return hit.Position.Y, hit.Instance
+    end
+    return nil, nil
+end
+
+local function requestJump(state, humanoid)
+    if not humanoid or not grounded(humanoid) then
+        return false
+    end
+    if humanoid.FloorMaterial == Enum.Material.Air then
+        return false
+    end
+    if os.clock() - (state.LastJump or 0) < 0.75 then
+        return false
+    end
+    state.LastJump = os.clock()
+    humanoid.Jump = true
+    return true
+end
+
+local function maybeJumpForLedge(state, root, humanoid, moveTarget)
+    if not root or not humanoid or not moveTarget then
+        return false
+    end
+    if not grounded(humanoid) or humanoid.FloorMaterial == Enum.Material.Air then
+        return false
+    end
+
+    local delta = Vector3.new(moveTarget.X - root.Position.X, 0, moveTarget.Z - root.Position.Z)
+    if delta.Magnitude < 1 then
+        return false
+    end
+
+    local dir = delta.Unit
+    local ignore = {getCharacter()}
+    local currentGroundY = getGroundYAt(root.Position, ignore)
+    if not currentGroundY then
+        return false
+    end
+
+    -- Check the tile a little in front of the player. In this block world the
+    -- next walkable ledge is usually 3 studs higher than the current tile.
+    local probe = root.Position + dir * 4
+    local nextGroundY, nextGround = getGroundYAt(probe, ignore)
+    if nextGroundY then
+        local climb = nextGroundY - currentGroundY
+        if climb > 0.9 and climb <= 4.2 then
+            return requestJump(state, humanoid)
+        elseif climb > 4.2 then
+            -- Too high to jump cleanly; force a fresh Roblox path instead of
+            -- repeatedly walking into the wall.
+            state.Waypoints = nil
+            state.LastPathTime = 0
+            return false
+        end
+    end
+
+    -- Extra wall check for ledges where the top ray misses due to being close
+    -- to the block edge.
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = ignore
+    local wallHit = Workspace:Raycast(root.Position + Vector3.new(0, 1.25, 0), dir * 3.25, params)
+    if wallHit and wallHit.Instance and wallHit.Instance.CanCollide then
+        local part = wallHit.Instance
+        local topY = part.Position.Y + part.Size.Y / 2
+        local climb = topY - currentGroundY
+        if climb > 0.9 and climb <= 4.2 then
+            return requestJump(state, humanoid)
+        elseif climb > 4.2 then
+            state.Waypoints = nil
+            state.LastPathTime = 0
+        end
+    end
+
+    return false
+end
+
 local function maybeStuck(state, root)
     if os.clock() - (state.LastStuckCheck or 0) < 0.45 then
         return false
@@ -540,6 +626,7 @@ local function movementTick(state)
     local directFlat = flatDistance(root.Position, stand)
     if directFlat <= 18 and math.abs(root.Position.Y - stand.Y) <= 8 then
         humanoid:MoveTo(stand)
+        maybeJumpForLedge(state, root, humanoid, stand)
     else
         if not state.Waypoints or not state.Waypoints[state.Index] or os.clock() - (state.LastPathTime or 0) > 6 then
             state.Waypoints = computePath(stand)
@@ -549,6 +636,7 @@ local function movementTick(state)
             if not state.Waypoints then
                 -- Fall back to normal MoveTo instead of doing nothing. Roblox pathfinding often fails on this block world.
                 humanoid:MoveTo(stand)
+                maybeJumpForLedge(state, root, humanoid, stand)
             end
         end
 
@@ -559,6 +647,7 @@ local function movementTick(state)
                 state.Index += 1
             else
                 humanoid:MoveTo(target)
+                maybeJumpForLedge(state, root, humanoid, target)
                 if waypoint.Action == Enum.PathWaypointAction.Jump then
                     jumpIfStuck(state, humanoid)
                 end
@@ -569,6 +658,7 @@ local function movementTick(state)
     end
 
     if maybeStuck(state, root) then
+        maybeJumpForLedge(state, root, humanoid, stand)
         jumpIfStuck(state, humanoid)
         state.Waypoints = nil
         state.LastPathTime = 0
