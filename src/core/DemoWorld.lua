@@ -8,6 +8,25 @@ local PathfindingService = game:GetService("PathfindingService")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
+local function getTrimTreeRemote()
+    local replicatedStorage = game:GetService("ReplicatedStorage")
+    local ok, remote = pcall(function()
+        return replicatedStorage
+            .rbxts_include
+            .node_modules["@rbxts"]
+            .net
+            .out
+            ._NetManaged
+            .CLIENT_TRIM_TREE_REQUEST
+    end)
+
+    if ok and remote then
+        return remote
+    end
+
+    return nil
+end
+
 local AxePriority = {
     woodAxe = 1,
     stoneAxe = 2,
@@ -23,7 +42,7 @@ local DemoWorld = {
     MovementConnection = nil,
     OverlayItems = {},
     AutoCollectRunning = false,
-    ClickInterval = 0.32,
+    ClickInterval = 0.22,
     LastTreeClick = 0,
     CurrentMoveTree = nil,
     CurrentTPTree = nil,
@@ -465,43 +484,57 @@ end
 local faceTree
 
 function DemoWorld.ActivateHeldAxe(tree)
-    local player = Players.LocalPlayer
-    local character = player and player.Character
+    if not isTreeLive(tree) then
+        return false
+    end
 
     if not DemoWorld.EquipBestAxe() then
         return false
     end
 
-    character = player and player.Character
-    local tool = DemoWorld.GetBestAxe()
-    if not tool or tool.Parent ~= character then
+    local trunk = getTrunk(tree)
+    if not trunk then
         return false
     end
 
-    -- Face the trunk, activate the held axe, then click the verified trunk screen point.
-    -- This never uses the user's current cursor, so crops/UI/ground cannot be clicked accidentally.
     faceTree(tree)
 
-    local trunk = getTrunk(tree)
-    local aimPoint = getTreeAimPoint(tree) or (trunk and trunk.Position)
+    -- The game uses this request when the player actually chops a tree.
+    -- Calling it directly avoids camera movement, real/virtual cursor targeting,
+    -- and accidental clicks on crops/grass under the player.
+    local remote = getTrimTreeRemote()
+    if remote and remote:IsA("RemoteFunction") then
+        local ok = pcall(function()
+            remote:InvokeServer({
+                tree = trunk.Parent,
+                part = trunk,
+            })
+        end)
 
-    -- First activate normally, then click the trunk screen point, then fire any axe-local
-    -- remotes with the real trunk/container. This covers tools that read Mouse.Target and
-    -- tools that use their own RemoteEvent/RemoteFunction.
-    pcall(function()
-        tool:Activate()
-    end)
+        if ok then
+            return true
+        end
+    elseif remote and remote:IsA("RemoteEvent") then
+        local ok = pcall(function()
+            remote:FireServer({
+                tree = trunk.Parent,
+                part = trunk,
+            })
+        end)
 
-    pressLeftClick(tree)
-    fireAxeRemotes(tool, tree, trunk, aimPoint)
+        if ok then
+            return true
+        end
+    end
 
-    pcall(function()
-        tool:Activate()
-    end)
+    -- Last fallback for unusual executors/game updates. Direct remote should normally handle it.
+    local tool = DemoWorld.GetBestAxe()
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
 
-    return true
+    return false
 end
-
 faceTree = function(tree)
     local root = getRoot()
     local trunk = getTrunk(tree)
