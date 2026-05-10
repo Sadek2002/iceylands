@@ -7,7 +7,9 @@ local LoadingScreen = Runtime.LoadModule("src/ui/LoadingScreen.lua")
 local Window = Runtime.LoadModule("src/ui/Window.lua")
 local Notifications = Runtime.LoadModule("src/core/Notifications.lua")
 local Performance = Runtime.LoadModule("src/core/Performance.lua")
+local DemoWorld = Runtime.LoadModule("src/core/DemoWorld.lua")
 local GeneralTab = Runtime.LoadModule("src/tabs/General.lua")
+local DemoTab = Runtime.LoadModule("src/tabs/Demo.lua")
 local ForagingTab = Runtime.LoadModule("src/tabs/Foraging.lua")
 local SettingsTab = Runtime.LoadModule("src/tabs/Settings.lua")
 
@@ -182,6 +184,7 @@ function Main.Start()
 
     local function destroy()
         Performance.Restore()
+        DemoWorld.Restore()
 
         if app then
             app:Destroy()
@@ -215,6 +218,14 @@ function Main.Start()
     end)
 
     app:AddTab("Combat", "Lock", function() end)
+    app:AddTab("Demo", "Demo", function(container)
+        DemoTab.Mount(container, {
+            Config = Config,
+            State = state,
+            Toasts = toasts,
+            Root = root,
+        })
+    end)
     app:AddTab("Foraging", "Foraging", function(container)
         ForagingTab.Mount(container, {
             Config = Config,
@@ -250,6 +261,14 @@ function Main.Start()
     if not hotkeyOk then
         warn(Constants.Name .. " hotkey setup failed: " .. tostring(hotkeyErr))
     end
+
+    pcall(function()
+        DemoWorld.SetMovementDemo(state.MovementDemo)
+        DemoWorld.SetOverlayDemo(root, state.OverlayDemo)
+        DemoWorld.SetAutoCollectDemo(state.AutoCollectDemo, function(name)
+            toasts:Push("Collected " .. name, "success")
+        end)
+    end)
 
     if getgenv then
         getgenv().IceylandsDestroy = destroy

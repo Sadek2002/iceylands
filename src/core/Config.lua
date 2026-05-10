@@ -10,6 +10,9 @@ Config.Defaults = {
     DisableRendering = false,
     FpsBoost = false,
     ToggleKey = "RightShift",
+    MovementDemo = false,
+    OverlayDemo = false,
+    AutoCollectDemo = false,
 }
 
 local function cloneDefaults()
