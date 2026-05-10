@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local StarterGui = game:GetService("StarterGui")
 local Runtime = _G.IceylandsLoader
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
 
@@ -31,7 +32,12 @@ local DemoWorld = {
     TargetSearchInterval = 0.6,
     LastTargetSearch = 0,
     EquipIssuedAt = 0,
+    CurrentPath = nil,
+    CurrentPathIndex = 1,
+    PathIssuedAt = 0,
+    IgnoredTargets = {},
 }
+
 
 local function isLiveTarget(target)
     if not target or not target.Parent or target:GetAttribute("Collected") then
@@ -559,6 +565,269 @@ function DemoWorld.GetNearestCollectible()
     return nearest, nearestDistance
 end
 
+
+local GRID_SIZE = 3
+local MAX_PATH_RADIUS = 180
+local MAX_JUMP_HEIGHT = 4.25
+local MAX_DROP_HEIGHT = 7.0
+local WAYPOINT_REACHED_DISTANCE = 3.2
+local TREE_STAND_MIN_DISTANCE = 5
+local TREE_STAND_MAX_DISTANCE = 10
+
+local function notifyPathWarning(text)
+    warn("Iceylands: " .. text)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "Tree movement",
+            Text = text,
+            Duration = 3,
+        })
+    end)
+end
+
+local function gridRound(value)
+    return math.floor((value / GRID_SIZE) + 0.5) * GRID_SIZE
+end
+
+local function gridKey(x, z)
+    return tostring(gridRound(x)) .. ":" .. tostring(gridRound(z))
+end
+
+local function getGroundNodes(origin, targetPosition)
+    local nodes = {}
+    local mid = (origin + targetPosition) * 0.5
+    local radius = math.clamp((origin - targetPosition).Magnitude * 0.65 + 45, 65, MAX_PATH_RADIUS)
+
+    for _, part in ipairs(Workspace:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide and part.Transparency < 1 then
+            local name = string.lower(part.Name)
+            local parentName = part.Parent and string.lower(part.Parent.Name) or ""
+            local usefulBlock = parentName == "blocks"
+                or string.find(name, "block", 1, true)
+                or string.find(name, "grass", 1, true)
+                or string.find(name, "stone", 1, true)
+                or string.find(name, "snow", 1, true)
+                or string.find(name, "bridge", 1, true)
+                or string.find(name, "log", 1, true)
+                or string.find(name, "wood", 1, true)
+                or string.find(name, "plank", 1, true)
+                or string.find(parentName, "bridge", 1, true)
+                or string.find(parentName, "wood", 1, true)
+
+            if (usefulBlock or (part.Size.X >= 2 and part.Size.X <= 6 and part.Size.Z >= 2 and part.Size.Z <= 6 and part.Size.Y <= 6)) and part.Size.X >= 2 and part.Size.Z >= 2 then
+                local flatDistance = (Vector3.new(part.Position.X, 0, part.Position.Z) - Vector3.new(mid.X, 0, mid.Z)).Magnitude
+                if flatDistance <= radius then
+                    local key = gridKey(part.Position.X, part.Position.Z)
+                    local topY = part.Position.Y + (part.Size.Y * 0.5)
+                    local existing = nodes[key]
+                    if not existing or topY > existing.TopY then
+                        nodes[key] = {
+                            Key = key,
+                            X = gridRound(part.Position.X),
+                            Z = gridRound(part.Position.Z),
+                            TopY = topY,
+                            Part = part,
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    return nodes
+end
+
+local function closestNode(nodes, position, minDist, maxDist)
+    local best
+    local bestScore = math.huge
+    local flat = Vector3.new(position.X, 0, position.Z)
+
+    for _, node in pairs(nodes) do
+        local nodeFlat = Vector3.new(node.X, 0, node.Z)
+        local flatDistance = (nodeFlat - flat).Magnitude
+        if (not minDist or flatDistance >= minDist) and (not maxDist or flatDistance <= maxDist) then
+            local verticalPenalty = math.abs((position.Y or node.TopY) - node.TopY) * 0.2
+            local score = flatDistance + verticalPenalty
+            if score < bestScore then
+                best = node
+                bestScore = score
+            end
+        end
+    end
+
+    return best
+end
+
+local function reconstructPath(cameFrom, current, nodes)
+    local reversed = { current }
+    while cameFrom[current] do
+        current = cameFrom[current]
+        table.insert(reversed, current)
+    end
+
+    local path = {}
+    for i = #reversed, 1, -1 do
+        local node = nodes[reversed[i]]
+        if node then
+            table.insert(path, Vector3.new(node.X, node.TopY + 3.0, node.Z))
+        end
+    end
+    return path
+end
+
+local function buildGridPath(startPosition, targetPosition)
+    local nodes = getGroundNodes(startPosition, targetPosition)
+    local startNode = closestNode(nodes, startPosition, nil, 8)
+    local goalNode = closestNode(nodes, targetPosition, TREE_STAND_MIN_DISTANCE, TREE_STAND_MAX_DISTANCE)
+        or closestNode(nodes, targetPosition, 3.5, 14)
+
+    if not startNode or not goalNode then
+        return nil
+    end
+
+    local open = { startNode.Key }
+    local openSet = { [startNode.Key] = true }
+    local cameFrom = {}
+    local gScore = { [startNode.Key] = 0 }
+    local fScore = {}
+
+    local function heuristic(aKey, bNode)
+        local a = nodes[aKey]
+        if not a or not bNode then
+            return math.huge
+        end
+        return math.abs(a.X - bNode.X) + math.abs(a.Z - bNode.Z) + math.abs(a.TopY - bNode.TopY) * 2
+    end
+
+    fScore[startNode.Key] = heuristic(startNode.Key, goalNode)
+
+    local directions = {
+        { GRID_SIZE, 0 },
+        { -GRID_SIZE, 0 },
+        { 0, GRID_SIZE },
+        { 0, -GRID_SIZE },
+    }
+
+    local safetyCounter = 0
+    while #open > 0 and safetyCounter < 2500 do
+        safetyCounter += 1
+        local bestIndex = 1
+        local current = open[1]
+        local currentScore = fScore[current] or math.huge
+        for i = 2, #open do
+            local score = fScore[open[i]] or math.huge
+            if score < currentScore then
+                current = open[i]
+                currentScore = score
+                bestIndex = i
+            end
+        end
+
+        table.remove(open, bestIndex)
+        openSet[current] = nil
+
+        if current == goalNode.Key then
+            return reconstructPath(cameFrom, current, nodes)
+        end
+
+        local currentNode = nodes[current]
+        if currentNode then
+            for _, dir in ipairs(directions) do
+                local nextKey = gridKey(currentNode.X + dir[1], currentNode.Z + dir[2])
+                local nextNode = nodes[nextKey]
+                if nextNode then
+                    local dy = nextNode.TopY - currentNode.TopY
+                    if dy <= MAX_JUMP_HEIGHT and dy >= -MAX_DROP_HEIGHT then
+                        local stepCost = GRID_SIZE + math.max(dy, 0) * 2 + math.max(-dy, 0) * 0.35
+                        local tentative = (gScore[current] or math.huge) + stepCost
+                        if tentative < (gScore[nextKey] or math.huge) then
+                            cameFrom[nextKey] = current
+                            gScore[nextKey] = tentative
+                            fScore[nextKey] = tentative + heuristic(nextKey, goalNode)
+                            if not openSet[nextKey] then
+                                table.insert(open, nextKey)
+                                openSet[nextKey] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function getNearestReachableCollectible()
+    local root = getRoot()
+    if not root then
+        return nil, nil
+    end
+
+    local now = os.clock()
+    local candidates = {}
+    for _, item in ipairs(DemoWorld.GetCollectibles()) do
+        if isLiveTarget(item) and (not DemoWorld.IgnoredTargets[item] or DemoWorld.IgnoredTargets[item] < now) then
+            local targetPosition = getTreePosition(item)
+            if targetPosition then
+                table.insert(candidates, {
+                    Item = item,
+                    Position = targetPosition,
+                    Distance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(targetPosition.X, 0, targetPosition.Z)).Magnitude,
+                })
+            end
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        return a.Distance < b.Distance
+    end)
+
+    for _, candidate in ipairs(candidates) do
+        local path = buildGridPath(root.Position, candidate.Position)
+        if path and #path > 0 then
+            return candidate.Item, path
+        end
+
+        DemoWorld.IgnoredTargets[candidate.Item] = now + 20
+        notifyPathWarning("Can't pathfind to tree; ignoring it.")
+    end
+
+    return nil, nil
+end
+
+local function followMovementPath(path, targetPosition)
+    local humanoid = getHumanoid()
+    local root = getRoot()
+    if not humanoid or not root or not path or #path == 0 then
+        return false
+    end
+
+    local index = math.clamp(DemoWorld.CurrentPathIndex or 1, 1, #path)
+    local waypoint = path[index]
+    local flatDistance = (Vector3.new(root.Position.X, 0, root.Position.Z) - Vector3.new(waypoint.X, 0, waypoint.Z)).Magnitude
+
+    if flatDistance <= WAYPOINT_REACHED_DISTANCE then
+        index += 1
+        DemoWorld.CurrentPathIndex = index
+        if index > #path then
+            return true
+        end
+        waypoint = path[index]
+    end
+
+    if waypoint.Y - root.Position.Y > 1.5 then
+        humanoid.Jump = true
+    end
+
+    if os.clock() - DemoWorld.MoveToIssuedAt >= 0.35 then
+        DemoWorld.MoveToIssuedAt = os.clock()
+        humanoid:MoveTo(waypoint)
+    end
+
+    return false
+end
+
 function DemoWorld.SetMovementDemo(enabled)
     if DemoWorld.MovementConnection then
         DemoWorld.MovementConnection:Disconnect()
@@ -567,21 +836,24 @@ function DemoWorld.SetMovementDemo(enabled)
 
     if not enabled then
         DemoWorld.CurrentMoveTarget = nil
+        DemoWorld.CurrentPath = nil
+        DemoWorld.CurrentPathIndex = 1
         return
     end
 
     DemoWorld.CurrentMoveTarget = nil
+    DemoWorld.CurrentPath = nil
+    DemoWorld.CurrentPathIndex = 1
     DemoWorld.LastTargetSearch = 0
     DemoWorld.MoveToIssuedAt = 0
+    DemoWorld.IgnoredTargets = {}
     equipBestAxeThrottled(true)
     DemoWorld.SpawnObjectsAtTreePositions(10)
 
-    -- Optimised movement mode:
-    -- 1) Pick the nearest live tree once.
-    -- 2) Stay locked to that target until it disappears/breaks, even if a closer tree spawns.
-    -- 3) Only rescan after the locked target is gone, instead of scanning every frame.
-    -- 4) Once in axe range, stop walking and only swing/click.
-    DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function(deltaTime)
+    -- Movement mode now uses a simple block-grid A* path:
+    -- it walks on real collidable blocks/bridges only, ignores void gaps,
+    -- jumps 1-block ledges, and keeps the same tree locked until it breaks.
+    DemoWorld.MovementConnection = RunService.Heartbeat:Connect(function()
         local now = os.clock()
         local root = getRoot()
         if not root then
@@ -591,6 +863,8 @@ function DemoWorld.SetMovementDemo(enabled)
         local target = DemoWorld.CurrentMoveTarget
         if not isLiveTarget(target) then
             DemoWorld.CurrentMoveTarget = nil
+            DemoWorld.CurrentPath = nil
+            DemoWorld.CurrentPathIndex = 1
             target = nil
 
             if now - DemoWorld.LastTargetSearch < DemoWorld.TargetSearchInterval then
@@ -599,12 +873,13 @@ function DemoWorld.SetMovementDemo(enabled)
 
             DemoWorld.LastTargetSearch = now
             DemoWorld.SpawnObjectsAtTreePositions(10)
-            target = DemoWorld.GetNearestCollectible()
+            target, DemoWorld.CurrentPath = getNearestReachableCollectible()
             if not isLiveTarget(target) then
                 return
             end
 
             DemoWorld.CurrentMoveTarget = target
+            DemoWorld.CurrentPathIndex = 1
             DemoWorld.MoveToIssuedAt = 0
             equipBestAxeThrottled(true)
         else
@@ -614,6 +889,7 @@ function DemoWorld.SetMovementDemo(enabled)
         local targetPosition = getTreePosition(target)
         if not targetPosition then
             DemoWorld.CurrentMoveTarget = nil
+            DemoWorld.CurrentPath = nil
             return
         end
 
@@ -637,22 +913,31 @@ function DemoWorld.SetMovementDemo(enabled)
             return
         end
 
-        -- Walk toward the locked tree, but only issue movement every ~0.6s to avoid jitter/lag.
-        if now - DemoWorld.MoveToIssuedAt >= 0.6 then
-            DemoWorld.MoveToIssuedAt = now
-            local humanoid = getHumanoid()
-            local direction = Vector3.new(targetPosition.X - root.Position.X, 0, targetPosition.Z - root.Position.Z)
-            local stopPosition = targetPosition
-            if direction.Magnitude > 7 then
-                stopPosition = targetPosition - direction.Unit * 5
+        if not DemoWorld.CurrentPath or #DemoWorld.CurrentPath == 0 then
+            local path = buildGridPath(root.Position, targetPosition)
+            if not path or #path == 0 then
+                DemoWorld.IgnoredTargets[target] = now + 20
+                DemoWorld.CurrentMoveTarget = nil
+                DemoWorld.CurrentPath = nil
+                notifyPathWarning("Can't pathfind to tree; ignoring it.")
+                return
             end
+            DemoWorld.CurrentPath = path
+            DemoWorld.CurrentPathIndex = 1
+        end
 
-            if humanoid then
-                humanoid:MoveTo(stopPosition)
+        local finishedPath = followMovementPath(DemoWorld.CurrentPath, targetPosition)
+        if finishedPath then
+            -- Rebuild from the current spot if we reached the last safe block but are still outside axe range.
+            local path = buildGridPath(root.Position, targetPosition)
+            if path and #path > 0 then
+                DemoWorld.CurrentPath = path
+                DemoWorld.CurrentPathIndex = 1
             else
-                local step = math.min(flatDistance, 18 * math.max(deltaTime, 1 / 60))
-                local nextPosition = root.Position + direction.Unit * step
-                root.CFrame = CFrame.new(nextPosition, Vector3.new(targetPosition.X, nextPosition.Y, targetPosition.Z))
+                DemoWorld.IgnoredTargets[target] = now + 20
+                DemoWorld.CurrentMoveTarget = nil
+                DemoWorld.CurrentPath = nil
+                notifyPathWarning("Can't pathfind to tree; ignoring it.")
             end
         end
     end)
