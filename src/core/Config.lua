@@ -7,6 +7,8 @@ local Config = {}
 Config.Defaults = {
     ExampleToggle = true,
     ExampleSlider = 75,
+    DisableRendering = false,
+    FpsBoost = false,
 }
 
 local function cloneDefaults()

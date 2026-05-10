@@ -134,35 +134,51 @@ function Window.new(root, services)
 
     local sidebar = Instance.new("Frame")
     sidebar.Position = UDim2.fromOffset(0, 56)
-    sidebar.Size = UDim2.fromOffset(164, 314)
+    sidebar.Size = UDim2.new(0, 164, 1, -56)
     sidebar.BackgroundColor3 = Theme.Colors.Black
     sidebar.BackgroundTransparency = 0.65
     sidebar.Parent = frame
 
+    local tabArea = Instance.new("Frame")
+    tabArea.BackgroundTransparency = 1
+    tabArea.Position = UDim2.fromOffset(0, 0)
+    tabArea.Size = UDim2.new(1, 0, 1, -66)
+    tabArea.Parent = sidebar
+
     local tabList = Instance.new("UIListLayout")
     tabList.Padding = UDim.new(0, 8)
     tabList.SortOrder = Enum.SortOrder.LayoutOrder
-    tabList.Parent = sidebar
+    tabList.Parent = tabArea
 
     local tabPad = Instance.new("UIPadding")
     tabPad.PaddingTop = UDim.new(0, 10)
     tabPad.PaddingLeft = UDim.new(0, 14)
     tabPad.PaddingRight = UDim.new(0, 10)
-    tabPad.Parent = sidebar
+    tabPad.Parent = tabArea
+
+    local bottomArea = Instance.new("Frame")
+    bottomArea.BackgroundTransparency = 1
+    bottomArea.AnchorPoint = Vector2.new(0, 1)
+    bottomArea.Position = UDim2.new(0, 0, 1, 0)
+    bottomArea.Size = UDim2.new(1, 0, 0, 66)
+    bottomArea.Parent = sidebar
+
+    local bottomList = Instance.new("UIListLayout")
+    bottomList.Padding = UDim.new(0, 8)
+    bottomList.SortOrder = Enum.SortOrder.LayoutOrder
+    bottomList.Parent = bottomArea
+
+    local bottomPad = Instance.new("UIPadding")
+    bottomPad.PaddingTop = UDim.new(0, 10)
+    bottomPad.PaddingLeft = UDim.new(0, 14)
+    bottomPad.PaddingRight = UDim.new(0, 10)
+    bottomPad.Parent = bottomArea
 
     local content = Instance.new("Frame")
     content.Position = UDim2.fromOffset(164, 56)
-    content.Size = UDim2.new(1, -164, 1, -126)
+    content.Size = UDim2.new(1, -164, 1, -56)
     content.BackgroundTransparency = 1
     content.Parent = frame
-
-    local footer = Instance.new("Frame")
-    footer.AnchorPoint = Vector2.new(0, 1)
-    footer.Position = UDim2.new(0, 0, 1, 0)
-    footer.Size = UDim2.new(1, 0, 0, 60)
-    footer.BackgroundColor3 = Theme.Colors.Black
-    footer.BackgroundTransparency = 0.72
-    footer.Parent = frame
 
     local iconButton = Instance.new("ImageButton")
     iconButton.Name = "MinimizedIcon"
@@ -193,65 +209,6 @@ function Window.new(root, services)
         fallback.Parent = iconButton
     end
 
-    local footerScroll = Instance.new("ScrollingFrame")
-    footerScroll.BackgroundTransparency = 1
-    footerScroll.BorderSizePixel = 0
-    footerScroll.Position = UDim2.fromOffset(14, 0)
-    footerScroll.Size = UDim2.new(1, -28, 1, 0)
-    footerScroll.CanvasSize = UDim2.fromOffset(0, 0)
-    footerScroll.AutomaticCanvasSize = Enum.AutomaticSize.X
-    footerScroll.ScrollBarThickness = 3
-    footerScroll.ScrollingDirection = Enum.ScrollingDirection.X
-    footerScroll.Parent = footer
-
-    local footerLayout = Instance.new("UIListLayout")
-    footerLayout.FillDirection = Enum.FillDirection.Horizontal
-    footerLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-    footerLayout.Padding = UDim.new(0, 12)
-    footerLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    footerLayout.Parent = footerScroll
-
-    local function footerButton(text, callback, width)
-        local button = Instance.new("TextButton")
-        button.Size = UDim2.fromOffset(width or 142, 38)
-        button.BackgroundColor3 = Theme.Colors.PanelLight
-        button.BackgroundTransparency = 0.42
-        button.Font = Theme.FontBold
-        button.TextSize = 13
-        button.TextColor3 = Theme.Colors.Text
-        button.Text = text
-        button.Parent = footerScroll
-        Instance.new("UICorner", button).CornerRadius = UDim.new(0, 7)
-        button.MouseButton1Click:Connect(callback)
-    end
-
-    footerButton("Save Config", function()
-        local ok, message = services.Config.Save(services.State)
-        services.Toasts:Push(ok and ("Config saved: " .. message) or message, ok and "success" or "warn")
-    end)
-
-    footerButton("Load Config", function()
-        services.State = services.Config.Load()
-        services.Toasts:Push("Config loaded", "success")
-    end)
-
-    footerButton("Export Config", function()
-        local json = services.Config.Export(services.State)
-        local ok = services.Config.Copy(json)
-        services.Toasts:Push(ok and "JSON copied" or json, ok and "success" or "warn")
-    end)
-
-    footerButton("Kill Script", function()
-        if services.Toasts then
-            services.Toasts:Push("Iceylands removed", "success")
-            task.wait(0.15)
-        end
-
-        if services.Destroy then
-            services.Destroy()
-        end
-    end, 128)
-
     close.MouseButton1Click:Connect(function()
         TweenService:Create(frame, TweenInfo.new(0.18), { Size = UDim2.fromOffset(520, 390), BackgroundTransparency = 1 }):Play()
         task.wait(0.18)
@@ -270,11 +227,15 @@ function Window.new(root, services)
     self.Root = root
     self.Frame = frame
     self.Sidebar = sidebar
+    self.TabArea = tabArea
+    self.BottomArea = bottomArea
     self.Content = content
     return self
 end
 
-function Window:AddTab(name, icon, mount)
+function Window:AddTab(name, icon, mount, options)
+    options = options or {}
+
     local button = Instance.new("TextButton")
     button.Size = UDim2.new(1, 0, 0, 46)
     button.BackgroundColor3 = Theme.Colors.PanelLight
@@ -284,7 +245,7 @@ function Window:AddTab(name, icon, mount)
     button.TextColor3 = Theme.Colors.Muted
     button.TextXAlignment = Enum.TextXAlignment.Left
     button.Text = "   " .. name
-    button.Parent = self.Sidebar
+    button.Parent = options.Bottom and self.BottomArea or self.TabArea
     Instance.new("UICorner", button).CornerRadius = UDim.new(0, 7)
 
     button.MouseButton1Click:Connect(function()

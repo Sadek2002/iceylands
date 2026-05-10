@@ -2,7 +2,7 @@
 
 Iceylands is a modular Roblox client UI foundation with a frosty translucent interface, loading animation, draggable window, minimized snowflake button, and JSON config support.
 
-This first version intentionally contains only UI and harmless placeholder controls.
+This first version contains UI, harmless placeholder controls, a Settings tab, config actions, and local performance toggles.
 
 ## Loader
 
@@ -33,3 +33,14 @@ assets/
 ```
 
 Assets are downloaded from the GitHub raw URL, cached into `Iceylands/assets`, and loaded through `getcustomasset` when the executor supports it. Text fallbacks are used otherwise.
+
+## Settings
+
+The Settings tab currently includes:
+
+- Disable Rendering
+- FPS Boost
+- Save Config
+- Load Config
+- Export Config
+- Kill Script

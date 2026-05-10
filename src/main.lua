@@ -6,7 +6,9 @@ local Config = Runtime.LoadModule("src/core/Config.lua")
 local LoadingScreen = Runtime.LoadModule("src/ui/LoadingScreen.lua")
 local Window = Runtime.LoadModule("src/ui/Window.lua")
 local Notifications = Runtime.LoadModule("src/core/Notifications.lua")
+local Performance = Runtime.LoadModule("src/core/Performance.lua")
 local GeneralTab = Runtime.LoadModule("src/tabs/General.lua")
+local SettingsTab = Runtime.LoadModule("src/tabs/Settings.lua")
 
 local Main = {}
 
@@ -56,6 +58,8 @@ function Main.Start()
     loading:Destroy()
 
     local function destroy()
+        Performance.Restore()
+
         if getgenv then
             getgenv().IceylandsDestroy = nil
         end
@@ -71,7 +75,11 @@ function Main.Start()
         State = state,
         Toasts = toasts,
         Destroy = destroy,
+        Root = root,
     })
+
+    Performance.SetRenderingDisabled(root, state.DisableRendering)
+    Performance.SetFpsBoost(state.FpsBoost)
 
     app:AddTab("General", "Home", function(container)
         GeneralTab.Mount(container, {
@@ -83,6 +91,15 @@ function Main.Start()
 
     app:AddTab("Combat", "Lock", function() end)
     app:AddTab("Foraging", "Lock", function() end)
+    app:AddTab("Settings", "Settings", function(container)
+        SettingsTab.Mount(container, {
+            Config = Config,
+            State = state,
+            Toasts = toasts,
+            Destroy = destroy,
+            Root = root,
+        })
+    end, { Bottom = true })
     app:SelectTab("General")
 
     if getgenv then
