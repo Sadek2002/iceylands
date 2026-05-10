@@ -3,7 +3,7 @@
 Iceylands is a modular Roblox client UI foundation with a frosty translucent interface, loading animation, draggable window, minimized snowflake button, and JSON config support.
 
 This first version contains UI, harmless placeholder controls, a Settings tab, config actions, and local performance toggles.
-The Demo tab uses a local `workspace.IceylandsDemo` folder for safe Studio/offline simulations. The Foraging tab is a read-only audit/demo panel for showcasing UI architecture and client-visible data summaries.
+The Foraging tab uses a local `workspace.IceylandsDemo` folder for safe Studio/offline tree-position simulations and read-only audit summaries.
 
 ## Loader
 
@@ -55,12 +55,8 @@ The Foraging tab includes:
 - Known tree model scan
 - Nearest tree distance list
 - Read-only audit JSON export
-
-## Universal Demo Mode
-
-The Demo tab includes:
-
-- Movement Demo for local demo collectibles
-- Overlay Demo for local demo markers
-- Auto-Collect Demo for local demo objects
-- Spawn/Clear demo object controls
+- Spawn Tree Positions
+- Tree Movement demo
+- Tree Overlay demo
+- TP To Demo Tree simulation
+- Clear Tree Overlay

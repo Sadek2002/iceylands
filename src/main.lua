@@ -9,7 +9,6 @@ local Notifications = Runtime.LoadModule("src/core/Notifications.lua")
 local Performance = Runtime.LoadModule("src/core/Performance.lua")
 local DemoWorld = Runtime.LoadModule("src/core/DemoWorld.lua")
 local GeneralTab = Runtime.LoadModule("src/tabs/General.lua")
-local DemoTab = Runtime.LoadModule("src/tabs/Demo.lua")
 local ForagingTab = Runtime.LoadModule("src/tabs/Foraging.lua")
 local SettingsTab = Runtime.LoadModule("src/tabs/Settings.lua")
 
@@ -218,19 +217,12 @@ function Main.Start()
     end)
 
     app:AddTab("Combat", "Lock", function() end)
-    app:AddTab("Demo", "Demo", function(container)
-        DemoTab.Mount(container, {
-            Config = Config,
-            State = state,
-            Toasts = toasts,
-            Root = root,
-        })
-    end)
     app:AddTab("Foraging", "Foraging", function(container)
         ForagingTab.Mount(container, {
             Config = Config,
             State = state,
             Toasts = toasts,
+            Root = root,
         })
     end)
     app:AddTab("Settings", "Settings", function(container)

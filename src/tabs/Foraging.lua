@@ -4,6 +4,7 @@ local Players = game:GetService("Players")
 local Runtime = _G.IceylandsLoader
 local Components = Runtime.LoadModule("src/ui/Components.lua")
 local TreeScanner = Runtime.LoadModule("src/core/TreeScanner.lua")
+local DemoWorld = Runtime.LoadModule("src/core/DemoWorld.lua")
 
 local Foraging = {}
 
@@ -123,6 +124,46 @@ function Foraging.Mount(parent, services)
         local json = HttpService:JSONEncode(audit)
         local ok = services.Config.Copy(json)
         services.Toasts:Push(ok and "Foraging audit copied" or json, ok and "success" or "warn")
+    end)
+
+    Components.Button(parent, "Spawn Tree Positions", "Creates local demo tree points using the audit locations.", "Spawn", function()
+        local count = DemoWorld.SpawnObjectsAtTreePositions(10)
+        if services.State.OverlayDemo then
+            DemoWorld.SetOverlayDemo(services.Root, true)
+        end
+
+        audit = collectAudit()
+        summaryLabel.Text = buildSummary(audit)
+        services.Toasts:Push(count > 0 and ("Spawned " .. count .. " tree demo points") or "No tree positions found", count > 0 and "success" or "warn")
+    end)
+
+    Components.Toggle(parent, "Tree Movement", "Moves toward Iceylands demo tree points only.", services.State.MovementDemo, function(value)
+        services.State.MovementDemo = value
+        DemoWorld.SetMovementDemo(value)
+        services.Toasts:Push(value and "Tree movement enabled" or "Tree movement disabled", "success")
+    end)
+
+    Components.Toggle(parent, "Tree Overlay", "Shows labels only on local tree demo points.", services.State.OverlayDemo, function(value)
+        services.State.OverlayDemo = value
+        DemoWorld.SetOverlayDemo(services.Root, value)
+        services.Toasts:Push(value and "Tree overlay enabled" or "Tree overlay disabled", "success")
+    end)
+
+    Components.Toggle(parent, "TP To Demo Tree", "Simulates collection by moving only between local tree demo points.", services.State.AutoCollectDemo, function(value)
+        services.State.AutoCollectDemo = value
+        DemoWorld.SetAutoCollectDemo(value, function(name)
+            services.Toasts:Push("Reached " .. name, "success")
+        end)
+        services.Toasts:Push(value and "Tree demo TP enabled" or "Tree demo TP disabled", "success")
+    end)
+
+    Components.Button(parent, "Clear Tree Overlay", "Removes local tree demo points and labels.", "Clear", function()
+        DemoWorld.Restore()
+        DemoWorld.ClearObjects()
+        services.State.MovementDemo = false
+        services.State.OverlayDemo = false
+        services.State.AutoCollectDemo = false
+        services.Toasts:Push("Tree demo overlay cleared", "success")
     end)
 end
 
