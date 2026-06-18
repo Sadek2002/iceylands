@@ -13,6 +13,10 @@ Config.Defaults = {
     MovementDemo = false,
     OverlayDemo = false,
     AutoCollectDemo = false,
+    ForagingRadius = 120,
+    ForagingDelay = 1.25,
+    ForagingStopDistance = 7,
+    ForagingStatus = "Disabled",
 }
 
 local function cloneDefaults()
